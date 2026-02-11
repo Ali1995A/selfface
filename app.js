@@ -37,6 +37,7 @@ const els = {
   gifPreview: document.getElementById("gifPreview"),
   effectFromName: document.getElementById("effectFromName"),
   version: document.getElementById("appVersion"),
+  toast: document.getElementById("toast"),
 
   sheet: document.getElementById("sheet"),
   sheetCollapsed: document.getElementById("sheetCollapsed"),
@@ -691,13 +692,46 @@ function drawEffectOverlay(context, nowMs) {
   }
 }
 
+let toastTimer = 0;
+function showToast(text, tone = "normal", { durationMs = 2600 } = {}) {
+  if (!els.toast) return;
+  const msg = String(text || "").trim();
+  if (!msg) {
+    els.toast.hidden = true;
+    els.toast.textContent = "";
+    els.toast.classList.remove("is-error");
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = 0;
+    return;
+  }
+
+  els.toast.hidden = false;
+  els.toast.textContent = msg;
+  els.toast.classList.toggle("is-error", tone === "error");
+
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    // Only auto-hide if the toast wasn't updated in the meantime.
+    if (els.toast && els.toast.textContent === msg) {
+      els.toast.hidden = true;
+    }
+  }, Math.max(800, durationMs || 0));
+}
+
 function setStatus(text, tone = "normal") {
   els.status.textContent = text || "";
   els.status.style.color = tone === "error" ? "#d23b3b" : "#8c9096";
+  // Result view hides the sheet HUD; show a lightweight toast for important messages.
+  if (!els.sheet.hidden) return;
+  showToast(text || "", tone);
 }
 
 function setProgress(text) {
   els.progress.textContent = text || "";
+  // Show progress in toast only when in result view (HUD hidden).
+  if (!els.sheet.hidden) return;
+  if (!text) return;
+  showToast(text, "normal", { durationMs: 1200 });
 }
 
 function isSecureContextOk() {
@@ -2524,16 +2558,16 @@ els.btnSwitchCam.addEventListener("click", async () => {
   await startPreview();
 });
 
-els.btnRetake.addEventListener("click", () => {
+bindTap(els.btnRetake, () => {
   hideResult();
   setStatus("重拍：点击快门录制");
 });
 
-els.btnDownload.addEventListener("click", () => {
+bindTap(els.btnDownload, () => {
   saveToPhotos();
 });
 
-els.btnShare.addEventListener("click", () => {
+bindTap(els.btnShare, () => {
   shareGif();
 });
 

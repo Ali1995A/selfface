@@ -433,6 +433,26 @@ button{font:inherit}
 }
 .wx-progress{color:#7f868d}
 
+/* Lightweight toast (used on result page since sheet HUD is hidden) */
+.wx-toast{
+  position:fixed;
+  left:50%;
+  transform:translateX(-50%);
+  /* Keep above bottom actions in result view */
+  bottom:calc(160px + env(safe-area-inset-bottom));
+  width:min(560px, 92vw);
+  padding:10px 12px;
+  border-radius:14px;
+  background:rgba(255,255,255,.92);
+  box-shadow:0 12px 30px rgba(0,0,0,.14);
+  color:#2a2a2a;
+  font-size:14px;
+  text-align:center;
+  pointer-events:none;
+  backdrop-filter: blur(12px);
+}
+.wx-toast.is-error{ color:#b52525; }
+
 /* Result panel overlay (tools + actions) */
 .wx-result{
   flex:1;
