@@ -189,7 +189,8 @@ button{font:inherit}
 }
 
 .wx-sheetCollapsed{
-  padding:14px 14px 0;
+  /* Keep effect strip fully above the shutter dock so taps don't hit the shutter */
+  padding:14px 14px calc(120px + env(safe-area-inset-bottom));
 }
 
 .wx-strip{
