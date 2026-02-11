@@ -2428,12 +2428,10 @@ function renderEffects() {
     els.effectStrip.appendChild(makeEffectThumb(eff));
   }
 
-  // Expanded grid: show without "more", add a few duplicates as placeholders to mimic density.
+  // Expanded grid: show all effects without "more".
   els.effectGrid.innerHTML = "";
   const gridEffects = effects.filter((e) => e.id !== "more");
-  const padded = [...gridEffects];
-  while (padded.length < 15) padded.push(gridEffects[(padded.length * 7) % gridEffects.length]);
-  for (const eff of padded) {
+  for (const eff of gridEffects) {
     els.effectGrid.appendChild(makeGridItem(eff));
   }
 }
