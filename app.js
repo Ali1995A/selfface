@@ -95,6 +95,7 @@ let captionSource = "none"; // "webspeech" | "whisper" | "none"
 let webSpeech = null;
 let whisperTranscriber = null;
 let whisperReady = false;
+let whisperInitPromise = null;
 let whisperTextListener = null; // (text: string) => void
 let whisperIsRecording = false;
 let whisperNeedsUserGesture = false;
@@ -1372,6 +1373,32 @@ function safeStorageRemove(storage, key) {
   }
 }
 
+async function withConfirmBypassForLargeModelDownload(fn) {
+  const orig = window.confirm;
+  const shouldBypass = (msg) => {
+    const s = String(msg || "");
+    // whisper-web-transcriber uses a confirm like:
+    // "You are about to download 57 MB of data. The model data will be cached..."
+    return (
+      s.includes("You are about to download") &&
+      s.toLowerCase().includes("model data") &&
+      s.toLowerCase().includes("cached")
+    );
+  };
+
+  if (typeof orig !== "function") return fn();
+
+  try {
+    window.confirm = (msg) => {
+      if (shouldBypass(msg)) return true;
+      return orig(msg);
+    };
+    return await fn();
+  } finally {
+    window.confirm = orig;
+  }
+}
+
 function initCoiState() {
   const attemptedAt = safeStorageGet(localStorage, COI_RELOAD_KEY);
 
@@ -1445,53 +1472,66 @@ async function ensureCoiForWhisper({ allowReload = false } = {}) {
 
 async function ensureWhisperReady() {
   if (whisperReady) return;
+  if (whisperInitPromise) return whisperInitPromise;
 
-  await loadScriptOnce("./assets/stt/whisper-web-transcriber.bundled.min.js");
+  whisperInitPromise = (async () => {
+    await loadScriptOnce("./assets/stt/whisper-web-transcriber.bundled.min.js");
 
-  const lib = window.WhisperTranscriber;
-  const Ctor = lib?.WhisperTranscriber;
-  if (typeof Ctor !== "function") {
-    throw new Error("whisper.wasm 相关脚本加载失败");
+    const lib = window.WhisperTranscriber;
+    const Ctor = lib?.WhisperTranscriber;
+    if (typeof Ctor !== "function") {
+      throw new Error("whisper.wasm 相关脚本加载失败");
+    }
+
+    if (!crossOriginIsolated) {
+      // Not always a hard error, but many WASM builds need SharedArrayBuffer.
+      console.warn("crossOriginIsolated=false; whisper.wasm 可能不可用或很慢（建议配置 COOP/COEP 或启用 COI SW）。");
+    }
+
+    whisperTranscriber = new Ctor({
+      onStatus: (s) => {
+        if (typeof s === "string" && s) setProgress(s);
+      },
+      onProgress: (p) => {
+        if (typeof p === "number" && Number.isFinite(p)) setProgress(`${Math.round(p * 100)}%`);
+      },
+      onError: (err) => {
+        console.error(err);
+      },
+      onTranscription: (t) => {
+        const next = normalizeWhisperResult(t);
+        if (!next) return;
+        try {
+          whisperTextListener?.(next);
+        } catch {
+          // ignore
+        }
+      },
+      debug: false,
+    });
+
+    if (typeof whisperTranscriber.initialize === "function") {
+      await whisperTranscriber.initialize();
+    } else if (typeof whisperTranscriber.init === "function") {
+      await whisperTranscriber.init();
+    }
+
+    if (typeof whisperTranscriber.loadModel === "function") {
+      // The library may show a blocking confirm about downloading ~57MB.
+      // Bypass it and rely on our own status/progress UI instead.
+      setProgress("字幕模型下载中…");
+      await withConfirmBypassForLargeModelDownload(() => whisperTranscriber.loadModel());
+      setProgress("");
+    }
+
+    whisperReady = true;
+  })();
+
+  try {
+    await whisperInitPromise;
+  } finally {
+    if (!whisperReady) whisperInitPromise = null;
   }
-
-  if (!crossOriginIsolated) {
-    // Not always a hard error, but many WASM builds need SharedArrayBuffer.
-    console.warn("crossOriginIsolated=false; whisper.wasm 可能不可用或很慢（建议配置 COOP/COEP 或启用 COI SW）。");
-  }
-
-  whisperTranscriber = new Ctor({
-    onStatus: (s) => {
-      if (typeof s === "string" && s) setProgress(s);
-    },
-    onProgress: (p) => {
-      if (typeof p === "number" && Number.isFinite(p)) setProgress(`${Math.round(p * 100)}%`);
-    },
-    onError: (err) => {
-      console.error(err);
-    },
-    onTranscription: (t) => {
-      const next = normalizeWhisperResult(t);
-      if (!next) return;
-      try {
-        whisperTextListener?.(next);
-      } catch {
-        // ignore
-      }
-    },
-    debug: false,
-  });
-
-  if (typeof whisperTranscriber.initialize === "function") {
-    await whisperTranscriber.initialize();
-  } else if (typeof whisperTranscriber.init === "function") {
-    await whisperTranscriber.init();
-  }
-
-  if (typeof whisperTranscriber.loadModel === "function") {
-    await whisperTranscriber.loadModel();
-  }
-
-  whisperReady = true;
 }
 
 function normalizeWhisperResult(res) {
