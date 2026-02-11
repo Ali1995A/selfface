@@ -35,6 +35,7 @@ const els = {
   video: document.getElementById("inputVideo"),
   jeelizCanvas: document.getElementById("jeelizCanvas"),
   gifPreview: document.getElementById("gifPreview"),
+  btnTapToStart: document.getElementById("btnTapToStart"),
   effectFromName: document.getElementById("effectFromName"),
 
   sheet: document.getElementById("sheet"),
@@ -731,6 +732,11 @@ function stopTracks(stream) {
   for (const t of stream.getTracks()) t.stop();
 }
 
+function setTapToStartVisible(visible) {
+  if (!els.btnTapToStart) return;
+  els.btnTapToStart.hidden = !visible;
+}
+
 async function requestMedia(facingMode) {
   if (!isSecureContextOk()) {
     throw new Error("必须在 HTTPS（或 localhost）下才能调用摄像头/麦克风。");
@@ -805,7 +811,7 @@ function attachStreamToVideo(stream) {
 
 function waitForVideoReady(videoEl) {
   return new Promise((resolve, reject) => {
-    if (videoEl.readyState >= 2 && videoEl.videoWidth > 0) return resolve();
+    if (videoEl.videoWidth > 0) return resolve();
     const to = setTimeout(() => reject(new Error("摄像头初始化超时")), 8000);
     const onReady = () => {
       if (videoEl.videoWidth > 0) {
@@ -815,10 +821,12 @@ function waitForVideoReady(videoEl) {
       }
     };
     const cleanup = () => {
+      videoEl.removeEventListener("loadedmetadata", onReady);
       videoEl.removeEventListener("loadeddata", onReady);
       videoEl.removeEventListener("canplay", onReady);
       videoEl.removeEventListener("timeupdate", onReady);
     };
+    videoEl.addEventListener("loadedmetadata", onReady);
     videoEl.addEventListener("loadeddata", onReady);
     videoEl.addEventListener("canplay", onReady);
     videoEl.addEventListener("timeupdate", onReady);
@@ -1515,6 +1523,7 @@ function startShutterProgress(durationMs) {
 
 async function startPreview() {
   hideResult();
+  setTapToStartVisible(false);
   if (isPreviewing) stopPreview();
   setProgress("");
   setStatus("初始化中：请求摄像头/麦克风权限…");
@@ -1539,7 +1548,8 @@ async function startPreview() {
     await waitForVideoReady(els.video);
   } catch (err) {
     // Common on iOS: permission granted but playback needs user gesture.
-    setStatus("已获取权限：点击快门开始预览", "error");
+    setStatus("已获取权限：点按画面开始预览", "error");
+    setTapToStartVisible(true);
     isPreviewing = false;
     return;
   }
@@ -1856,6 +1866,7 @@ function hideResult() {
   els.sheet.hidden = false;
   els.resultPanel.hidden = true;
   setShutterProgress(0);
+  setTapToStartVisible(!isPreviewing && streamIsLive(mediaStream));
 }
 
 function resetToDefaultView() {
@@ -2139,6 +2150,11 @@ els.btnSheetHandle.addEventListener("click", () => {
 });
 els.btnDockChevron.addEventListener("click", () => setSheetExpanded(true));
 
+els.btnTapToStart?.addEventListener("click", async () => {
+  setTapToStartVisible(false);
+  await startPreview();
+});
+
 async function shutterAction() {
   if (isRecording) return;
   if (!isPreviewing) {
@@ -2184,9 +2200,15 @@ function bindShutterHold() {
 async function autoRequestPermissionsOnLoad() {
   if (hasRequestedPermissions) return;
   try {
-    // Only request permissions; preview rendering may still require a user gesture on iOS.
+    // Request permissions on load, and try to start preview immediately.
     await ensureMediaStream();
-    setStatus("已请求权限：点击快门开始预览");
+    setStatus("已获取权限：正在启动预览…");
+    await startPreview();
+    // If preview still can't start (iOS gesture restriction), show tap-to-start overlay.
+    if (!isPreviewing && streamIsLive(mediaStream)) {
+      setTapToStartVisible(true);
+      setStatus("已获取权限：点按画面开始预览", "error");
+    }
   } catch (err) {
     setStatus(`无法获取权限：${err?.message || err}`, "error");
   }
