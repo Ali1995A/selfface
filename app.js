@@ -54,8 +54,8 @@ let lastStreamFacingMode = null;
 
 let stickerImg = null;
 let stickerReady = false;
-let stickers = [];
-let stickerIndex = 0;
+let imageCache = new Map(); // url -> Image
+let currentEffect = null;
 
 let captionText = "";
 let captionSource = "none"; // "webspeech" | "whisper" | "none"
@@ -69,6 +69,48 @@ const effects = [
   { id: "thanksBoss", name: "谢谢老板", from: "WeChat Effect", sticker: "./assets/stickers/glasses.png" },
   { id: "newYear", name: "新年好", from: "MurphyM", sticker: "./assets/stickers/mustache.png" },
   { id: "gongXiFaCai", name: "恭喜发财", from: "MurphyM", sticker: "./assets/stickers/crown.png" },
+  {
+    id: "catFace",
+    name: "猫猫",
+    from: "FaceUp",
+    sticker: "./assets/templates/faceup/cat.png",
+    placement: { scale: 2.35, offsetX: 0, offsetY: -0.02, clamp: [140, 320] },
+  },
+  {
+    id: "dogFace",
+    name: "狗狗",
+    from: "FaceUp",
+    sticker: "./assets/templates/faceup/dog.png",
+    placement: { scale: 2.35, offsetX: 0, offsetY: -0.02, clamp: [140, 320] },
+  },
+  {
+    id: "flowerBand",
+    name: "花环",
+    from: "FaceUp",
+    sticker: "./assets/templates/faceup/flower_hairband.png",
+    placement: { scale: 2.45, offsetX: 0, offsetY: -0.36, clamp: [160, 340] },
+  },
+  {
+    id: "skeleton",
+    name: "骷髅面具",
+    from: "FaceUp",
+    sticker: "./assets/templates/faceup/skeleton_mask.png",
+    placement: { scale: 2.25, offsetX: 0, offsetY: 0.06, clamp: [160, 340] },
+  },
+  {
+    id: "neonMask",
+    name: "霓虹口罩",
+    from: "FaceUp",
+    sticker: "./assets/templates/faceup/neon_facemask.png",
+    placement: { scale: 2.1, offsetX: 0, offsetY: 0.1, clamp: [140, 300] },
+  },
+  {
+    id: "bald",
+    name: "光头",
+    from: "FaceUp",
+    sticker: "./assets/templates/faceup/bald.png",
+    placement: { scale: 2.5, offsetX: 0, offsetY: -0.34, clamp: [160, 360] },
+  },
   { id: "more", name: "更多特效", from: "", sticker: null, thumb: "more" },
 ];
 let selectedEffectId = "thanksBoss";
@@ -268,15 +310,15 @@ function preloadImage(src) {
 }
 
 async function preloadStickers() {
-  const sources = [
-    "./assets/stickers/glasses.png",
-    "./assets/stickers/mustache.png",
-    "./assets/stickers/crown.png",
-  ];
-  const res = await Promise.allSettled(sources.map((s) => preloadImage(s)));
-  stickers = res.filter((r) => r.status === "fulfilled").map((r) => r.value);
-  stickerIndex = 0;
-  stickerImg = stickers[stickerIndex] || null;
+  const sources = effects
+    .filter((e) => typeof e.sticker === "string" && e.sticker)
+    .map((e) => e.sticker);
+  const uniq = Array.from(new Set(sources));
+  const res = await Promise.allSettled(uniq.map((s) => preloadImage(s)));
+  for (let i = 0; i < uniq.length; i++) {
+    const r = res[i];
+    if (r.status === "fulfilled") imageCache.set(uniq[i], r.value);
+  }
   stickerReady = true;
 }
 
@@ -488,11 +530,13 @@ function drawSticker(context) {
   if (!faceState || !faceState.detected || faceState.detected < 0.6) return;
 
   const { x, y, s, rz } = faceToCanvasTransform(faceState);
-  const w = clamp(s * 1.9, 70, 260);
+  const placement = currentEffect?.placement || { scale: 1.9, offsetX: 0, offsetY: -0.08, clamp: [70, 260] };
+  const [wMin, wMax] = placement.clamp || [70, 260];
+  const w = clamp(s * placement.scale, wMin, wMax);
   const h = (w / stickerImg.width) * stickerImg.height;
 
   context.save();
-  context.translate(x, y - s * 0.08);
+  context.translate(x + s * (placement.offsetX || 0), y + s * (placement.offsetY || -0.08));
   context.rotate(rz);
   context.drawImage(stickerImg, -w / 2, -h / 2, w, h);
   context.restore();
@@ -1130,15 +1174,10 @@ function resetToDefaultView() {
 function setEffect(effectId) {
   selectedEffectId = effectId;
   const eff = effects.find((e) => e.id === effectId) || effects[0];
+  currentEffect = eff;
   els.effectFromName.textContent = eff.from || "WeChat Effect";
 
-  // Sticker mapping:
-  if (!eff.sticker) {
-    stickerImg = null;
-  } else if (stickers.length) {
-    const idx = ["thanksBoss", "newYear", "gongXiFaCai"].indexOf(eff.id);
-    if (idx >= 0 && stickers[idx]) stickerImg = stickers[idx];
-  }
+  stickerImg = eff.sticker ? imageCache.get(eff.sticker) || null : null;
 
   // Effect overlay state
   effectState = {
