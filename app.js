@@ -93,6 +93,7 @@ let lastStreamFacingMode = null;
 let stickerImg = null;
 let stickerReady = false;
 let imageCache = new Map(); // url -> Image
+let imageLoading = new Map(); // url -> Promise<Image|null>
 let currentEffect = null;
 let frameImg = null;
 
@@ -732,10 +733,43 @@ function smoothstep(edge0, edge1, x) {
 function preloadImage(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = () => resolve(img);
+    img.decoding = "async";
+    img.onload = async () => {
+      // Ensure Safari has decoded the image before we try drawImage during animation frames.
+      try {
+        if (typeof img.decode === "function") await img.decode();
+      } catch {
+        // ignore decode failures; drawImage may still work
+      }
+      resolve(img);
+    };
     img.onerror = reject;
     img.src = src;
   });
+}
+
+async function loadImageCached(src) {
+  if (!src) return null;
+  const cached = imageCache.get(src);
+  if (cached) return cached;
+
+  const pending = imageLoading.get(src);
+  if (pending) return pending;
+
+  const p = preloadImage(src)
+    .then((img) => {
+      imageCache.set(src, img);
+      imageLoading.delete(src);
+      return img;
+    })
+    .catch((e) => {
+      console.warn("Failed to load image:", src, e);
+      imageLoading.delete(src);
+      return null;
+    });
+
+  imageLoading.set(src, p);
+  return p;
 }
 
 async function preloadStickers() {
@@ -743,10 +777,10 @@ async function preloadStickers() {
     .flatMap((e) => [e.sticker, e.frame])
     .filter((s) => typeof s === "string" && s);
   const uniq = Array.from(new Set(sources));
-  const res = await Promise.allSettled(uniq.map((s) => preloadImage(s)));
+  const res = await Promise.allSettled(uniq.map((s) => loadImageCached(s)));
   for (let i = 0; i < uniq.length; i++) {
     const r = res[i];
-    if (r.status === "fulfilled") imageCache.set(uniq[i], r.value);
+    if (r.status === "fulfilled" && r.value) imageCache.set(uniq[i], r.value);
   }
   stickerReady = true;
 }
@@ -1232,7 +1266,12 @@ function drawSticker(context) {
   context.globalAlpha = baseAlpha * fade;
   context.translate(x + s * (placement.offsetX || 0), y + s * (placement.offsetY || -0.08));
   context.rotate(rz);
-  context.drawImage(stickerImg, -w / 2, -h / 2, w, h);
+  try {
+    context.drawImage(stickerImg, -w / 2, -h / 2, w, h);
+  } catch (e) {
+    console.warn("drawImage(sticker) failed", e);
+    stickerImg = null;
+  }
   context.restore();
 }
 
@@ -1364,7 +1403,12 @@ function drawFrameOverlay(context) {
   if (frameImg) {
     context.save();
     context.globalAlpha = 0.95;
-    context.drawImage(frameImg, 0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
+    try {
+      context.drawImage(frameImg, 0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
+    } catch (e) {
+      console.warn("drawImage(frame) failed", e);
+      frameImg = null;
+    }
     context.restore();
   }
 }
@@ -2378,8 +2422,27 @@ function setEffect(effectId) {
   currentEffect = eff;
   els.effectFromName.textContent = eff.from || "WeChat Effect";
 
-  stickerImg = eff.sticker ? imageCache.get(eff.sticker) || null : null;
-  frameImg = eff.frame ? imageCache.get(eff.frame) || null : null;
+  const nextStickerSrc = eff.sticker || "";
+  const nextFrameSrc = eff.frame || "";
+
+  stickerImg = nextStickerSrc ? imageCache.get(nextStickerSrc) || null : null;
+  frameImg = nextFrameSrc ? imageCache.get(nextFrameSrc) || null : null;
+
+  // Lazy-load missing assets to make effect switching reliable even if preload was interrupted.
+  if (nextStickerSrc && !stickerImg) {
+    loadImageCached(nextStickerSrc).then((img) => {
+      if (!img) return;
+      if (selectedEffectId !== eff.id) return;
+      stickerImg = img;
+    });
+  }
+  if (nextFrameSrc && !frameImg) {
+    loadImageCached(nextFrameSrc).then((img) => {
+      if (!img) return;
+      if (selectedEffectId !== eff.id) return;
+      frameImg = img;
+    });
+  }
 
   // Effect overlay state
   effectState = {
@@ -2554,11 +2617,16 @@ function makeEffectThumb(effect) {
   item.appendChild(label);
 
   item.addEventListener("click", () => {
-    if (effect.id === "more") {
-      setSheetExpanded(true);
-      return;
+    try {
+      if (effect.id === "more") {
+        setSheetExpanded(true);
+        return;
+      }
+      setEffect(effect.id);
+    } catch (e) {
+      console.warn(e);
+      setStatus("切换特效失败：资源加载异常", "error");
     }
-    setEffect(effect.id);
   });
 
   return item;
@@ -2605,9 +2673,14 @@ function makeGridItem(effect) {
   item.appendChild(label);
 
   item.addEventListener("click", () => {
-    if (effect.id === "more") return;
-    setEffect(effect.id);
-    setSheetExpanded(false);
+    try {
+      if (effect.id === "more") return;
+      setEffect(effect.id);
+      setSheetExpanded(false);
+    } catch (e) {
+      console.warn(e);
+      setStatus("切换特效失败：资源加载异常", "error");
+    }
   });
 
   return item;
