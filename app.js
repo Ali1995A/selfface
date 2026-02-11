@@ -66,6 +66,7 @@ const ctx = els.canvas.getContext("2d", { alpha: false, desynchronized: true });
 let mediaStream = null;
 let micStream = null;
 let faceState = null;
+let faceSmooth = null; // { x,y,s,rz,detected,lastMs,lastSeenMs }
 let rafId = 0;
 let isPreviewing = false;
 let isRecording = false;
@@ -405,8 +406,9 @@ function drawEffectOverlay(context, nowMs) {
 
   if (id === "bunnyEars") {
     // Cute bunny ears above head (face-tracked).
-    if (!faceState || !faceState.detected || faceState.detected < 0.6) return;
-    const { x, y, s, rz } = faceToCanvasTransform(faceState);
+    const ft = getFaceTransform();
+    if (!ft || ft.detected < FACE_RENDER_TH) return;
+    const { x, y, s, rz, detected } = ft;
     const earH = clamp(s * 1.05, 140, 220);
     const earW = earH * 0.32;
     const gap = earW * 0.55;
@@ -436,6 +438,7 @@ function drawEffectOverlay(context, nowMs) {
     };
 
     context.save();
+    context.globalAlpha = 0.86 + 0.14 * clamp((detected - FACE_RENDER_TH) / (1 - FACE_RENDER_TH), 0, 1);
     drawEar(-(gap + earW * 0.15), -0.12);
     drawEar(gap + earW * 0.15, 0.08);
     context.restore();
@@ -444,20 +447,22 @@ function drawEffectOverlay(context, nowMs) {
 
   if (id === "blush") {
     // Soft blush on cheeks (face-tracked).
-    if (!faceState || !faceState.detected || faceState.detected < 0.6) return;
-    const { x, y, s, rz } = faceToCanvasTransform(faceState);
+    const ft = getFaceTransform();
+    if (!ft || ft.detected < FACE_RENDER_TH) return;
+    const { x, y, s, rz, detected } = ft;
     const r = clamp(s * 0.22, 22, 44);
     const dx = clamp(s * 0.28, 28, 60);
     const yy = y + clamp(s * 0.08, 10, 22);
     const pulse = 0.86 + 0.12 * Math.sin(t * 2.2);
 
+    const conf = clamp((detected - FACE_RENDER_TH) / (1 - FACE_RENDER_TH), 0, 1);
     const drawCheek = (sx) => {
       const cx = x + sx;
       context.save();
       context.translate(cx, yy);
       context.rotate(rz);
       const g = context.createRadialGradient(0, 0, 0, 0, 0, r);
-      g.addColorStop(0, `rgba(255,120,170,${0.32 * pulse})`);
+      g.addColorStop(0, `rgba(255,120,170,${(0.26 + 0.10 * conf) * pulse})`);
       g.addColorStop(1, "rgba(255,120,170,0)");
       context.fillStyle = g;
       context.beginPath();
@@ -475,13 +480,15 @@ function drawEffectOverlay(context, nowMs) {
 
   if (id === "sparkleHalo") {
     // Small halo + sparkles above head (face-tracked).
-    if (!faceState || !faceState.detected || faceState.detected < 0.6) return;
-    const { x, y, s, rz } = faceToCanvasTransform(faceState);
+    const ft = getFaceTransform();
+    if (!ft || ft.detected < FACE_RENDER_TH) return;
+    const { x, y, s, rz, detected } = ft;
     const cx = x;
     const cy = y - clamp(s * 0.62, 70, 150);
     const R = clamp(s * 0.34, 48, 96);
 
     context.save();
+    context.globalAlpha = 0.88 + 0.12 * clamp((detected - FACE_RENDER_TH) / (1 - FACE_RENDER_TH), 0, 1);
     context.translate(cx, cy);
     context.rotate(rz * 0.4);
 
@@ -955,7 +962,11 @@ function roundRect(context, x, y, w, h, r) {
   context.closePath();
 }
 
-function faceToCanvasTransform(state) {
+const FACE_DETECT_UPDATE_TH = 0.45; // start/keep updating smoother
+const FACE_RENDER_TH = 0.55; // draw stickers/face-locked effects
+const FACE_LOST_HOLD_MS = 380; // keep last face for a short time when detection drops
+
+function rawFaceToCanvasTransform(state) {
   // state.x, state.y in [-1,1], origin center; state.s is scale.
   // With flipX=true, x already matches mirrored output.
   const x = (state.x * 0.5 + 0.5) * OUTPUT_SIZE;
@@ -965,9 +976,93 @@ function faceToCanvasTransform(state) {
   return { x, y, s, rz };
 }
 
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function lerpAngle(a, b, t) {
+  // shortest path on [-pi, pi]
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return a + d * t;
+}
+
+function updateFaceSmoother(nowMs) {
+  if (!faceSmooth) {
+    faceSmooth = {
+      x: OUTPUT_SIZE * 0.5,
+      y: OUTPUT_SIZE * 0.5,
+      s: OUTPUT_SIZE * 0.35,
+      rz: 0,
+      detected: 0,
+      lastMs: nowMs,
+      lastSeenMs: 0,
+    };
+  }
+
+  const dt = Math.max(0, Math.min(200, nowMs - (faceSmooth.lastMs || nowMs)));
+  faceSmooth.lastMs = nowMs;
+
+  const det = Number(faceState?.detected || 0);
+  const canUpdate =
+    !!faceState &&
+    Number.isFinite(faceState.x) &&
+    Number.isFinite(faceState.y) &&
+    Number.isFinite(faceState.s) &&
+    det >= FACE_DETECT_UPDATE_TH;
+
+  if (canUpdate) {
+    const raw = rawFaceToCanvasTransform(faceState);
+    faceSmooth.lastSeenMs = nowMs;
+
+    // Adaptive smoothing: strong enough to remove jitter, but responsive.
+    const posAlpha = 1 - Math.exp(-dt / 70);
+    const scaleAlpha = 1 - Math.exp(-dt / 95);
+    const rotAlpha = 1 - Math.exp(-dt / 110);
+
+    // More confident -> follow faster.
+    const conf = clamp((det - FACE_DETECT_UPDATE_TH) / (1 - FACE_DETECT_UPDATE_TH), 0, 1);
+    const kPos = clamp(posAlpha * (0.25 + 0.75 * conf), 0.08, 1);
+    const kS = clamp(scaleAlpha * (0.25 + 0.75 * conf), 0.06, 1);
+    const kR = clamp(rotAlpha * (0.22 + 0.78 * conf), 0.04, 1);
+
+    // First lock: snap quickly.
+    if (faceSmooth.detected < 0.01) {
+      faceSmooth.x = raw.x;
+      faceSmooth.y = raw.y;
+      faceSmooth.s = raw.s;
+      faceSmooth.rz = raw.rz;
+    } else {
+      faceSmooth.x = lerp(faceSmooth.x, raw.x, kPos);
+      faceSmooth.y = lerp(faceSmooth.y, raw.y, kPos);
+      faceSmooth.s = lerp(faceSmooth.s, raw.s, kS);
+      faceSmooth.rz = lerpAngle(faceSmooth.rz, raw.rz, kR);
+    }
+
+    faceSmooth.detected = det;
+  } else {
+    // Detection dropped: hold briefly (prevents flicker), then fade out.
+    const sinceSeen = nowMs - (faceSmooth.lastSeenMs || 0);
+    if (sinceSeen > FACE_LOST_HOLD_MS) {
+      faceSmooth.detected = 0;
+    } else {
+      // decay confidence slowly while holding
+      const left = clamp(1 - sinceSeen / FACE_LOST_HOLD_MS, 0, 1);
+      faceSmooth.detected = Math.max(faceSmooth.detected * 0.985, left * 0.6);
+    }
+  }
+}
+
+function getFaceTransform() {
+  if (!faceSmooth) return null;
+  return { x: faceSmooth.x, y: faceSmooth.y, s: faceSmooth.s, rz: faceSmooth.rz, detected: faceSmooth.detected };
+}
+
 function getFaceRegion() {
-  if (!faceState || !faceState.detected || faceState.detected < 0.6) return null;
-  const { x, y, s } = faceToCanvasTransform(faceState);
+  const ft = getFaceTransform();
+  if (!ft || ft.detected < FACE_RENDER_TH) return null;
+  const { x, y, s } = ft;
   const rx = clamp(s * 0.75, 70, 155);
   const ry = clamp(s * 0.95, 90, 190);
   return { x, y, rx, ry };
@@ -1023,9 +1118,10 @@ function drawBeautyOverlay(context, nowMs) {
 
 function drawLipstick(context, nowMs) {
   if (!BEAUTY.enabled || !BEAUTY.lipstick?.enabled) return;
-  if (!faceState || !faceState.detected || faceState.detected < 0.6) return;
+  const ft = getFaceTransform();
+  if (!ft || ft.detected < FACE_RENDER_TH) return;
 
-  const { x, y, s, rz } = faceToCanvasTransform(faceState);
+  const { x, y, s, rz } = ft;
   // Approx mouth region: slightly below face center.
   const mouthY = y + clamp(s * 0.23, 18, 62);
   const mouthW = clamp(s * 0.44, 54, 118);
@@ -1071,16 +1167,20 @@ function drawLipstick(context, nowMs) {
 
 function drawSticker(context) {
   if (!stickerReady || !stickerImg) return;
-  if (!faceState || !faceState.detected || faceState.detected < 0.6) return;
+  const ft = getFaceTransform();
+  if (!ft || ft.detected < FACE_RENDER_TH) return;
 
-  const { x, y, s, rz } = faceToCanvasTransform(faceState);
+  const { x, y, s, rz, detected } = ft;
   const placement = currentEffect?.placement || { scale: 1.9, offsetX: 0, offsetY: -0.08, clamp: [70, 260] };
   const [wMin, wMax] = placement.clamp || [70, 260];
   const w = clamp(s * placement.scale, wMin, wMax);
   const h = (w / stickerImg.width) * stickerImg.height;
 
   context.save();
-  if (typeof placement.alpha === "number") context.globalAlpha = clamp(placement.alpha, 0, 1);
+  const conf = clamp((detected - FACE_RENDER_TH) / (1 - FACE_RENDER_TH), 0, 1);
+  const fade = 0.72 + 0.28 * conf; // keep visible even when tracking is a bit weak
+  const baseAlpha = typeof placement.alpha === "number" ? clamp(placement.alpha, 0, 1) : 1;
+  context.globalAlpha = baseAlpha * fade;
   context.translate(x + s * (placement.offsetX || 0), y + s * (placement.offsetY || -0.08));
   context.rotate(rz);
   context.drawImage(stickerImg, -w / 2, -h / 2, w, h);
@@ -1122,6 +1222,7 @@ function drawFrame() {
   }
 
   const now = performance.now();
+  updateFaceSmoother(now);
   drawBeautyOverlay(ctx, now);
   drawLipstick(ctx, now);
   drawSticker(ctx);
@@ -1231,6 +1332,7 @@ function stopPreview() {
   hasMic = false;
   lastStreamFacingMode = null;
   faceState = null;
+  faceSmooth = null;
   stopWebSpeech();
   stopWhisperCaptions();
 }
