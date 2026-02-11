@@ -2155,7 +2155,7 @@ async function recordGif3s() {
       isRecording = false;
       els.btnShutter.classList.remove("is-busy");
       stopShutterProgress();
-      setShutterProgress(1);
+      setShutterProgress(0);
       showResult();
     });
   }
@@ -2233,7 +2233,7 @@ async function recordGif3s() {
       isRecording = false;
       els.btnShutter.classList.remove("is-busy");
       stopShutterProgress();
-      setShutterProgress(1);
+      setShutterProgress(0);
       showResult();
     });
 
