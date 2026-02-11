@@ -67,6 +67,8 @@ let faceSmooth = null; // { x,y,s,rz,detected,lastMs,lastSeenMs }
 let rafId = 0;
 let isPreviewing = false;
 let isRecording = false;
+let jeelizReady = false;
+let jeelizInitPromise = null;
 let lastGifBlob = null;
 let lastGifUrl = null;
 let lastOriginalGifBlob = null;
@@ -792,12 +794,22 @@ function attachStreamToVideo(stream) {
   v.autoplay = true;
   try {
     v.setAttribute("playsinline", "");
+    v.setAttribute("webkit-playsinline", "");
     v.setAttribute("muted", "");
     v.setAttribute("autoplay", "");
   } catch {
     // ignore
   }
   v.srcObject = stream;
+
+  // Retry play once metadata is ready (some iOS builds require this ordering).
+  try {
+    v.onloadedmetadata = () => {
+      tryResumeVideoPlayback();
+    };
+  } catch {
+    // ignore
+  }
   // Note: iOS may reject play() without a user gesture; we will retry.
   v.play().catch(() => {});
 }
@@ -901,6 +913,55 @@ function destroyJeeliz() {
   } catch {
     // ignore
   }
+}
+
+function promiseTimeout(promise, timeoutMs, timeoutMessage = "timeout") {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const to = setTimeout(() => {
+      if (done) return;
+      done = true;
+      reject(new Error(timeoutMessage));
+    }, Math.max(0, timeoutMs || 0));
+    Promise.resolve(promise)
+      .then((v) => {
+        if (done) return;
+        done = true;
+        clearTimeout(to);
+        resolve(v);
+      })
+      .catch((e) => {
+        if (done) return;
+        done = true;
+        clearTimeout(to);
+        reject(e);
+      });
+  });
+}
+
+function startJeelizInBackground() {
+  if (jeelizReady) return Promise.resolve(true);
+  if (jeelizInitPromise) return jeelizInitPromise;
+
+  jeelizInitPromise = (async () => {
+    try {
+      await promiseTimeout(initJeelizFaceFilter(), 6000, "jeeliz init timeout");
+      jeelizReady = true;
+      return true;
+    } catch (e) {
+      console.warn(e);
+      try {
+        destroyJeeliz();
+      } catch {
+        // ignore
+      }
+      jeelizReady = false;
+      if (isPreviewing) setStatus("预览中（人脸跟踪暂不可用）", "error");
+      return false;
+    }
+  })();
+
+  return jeelizInitPromise;
 }
 
 function roundRect(context, x, y, w, h, r) {
@@ -1330,6 +1391,8 @@ function stopPreview() {
   if (rafId) cancelAnimationFrame(rafId);
   rafId = 0;
   destroyJeeliz();
+  jeelizInitPromise = null;
+  jeelizReady = false;
   stopTracks(mediaStream);
   mediaStream = null;
   lastStreamFacingMode = null;
@@ -1529,19 +1592,13 @@ function startShutterProgress(durationMs) {
 
 async function finalizePreviewStart() {
   if (isPreviewing) return;
-
-  try {
-    await initJeelizFaceFilter();
-  } catch (err) {
-    // Face filter failure should degrade: still show camera without sticker tracking.
-    console.warn(err);
-    setStatus("已开始预览（人脸跟踪不可用，将不叠加贴纸）", "error");
-  }
-
   isPreviewing = true;
 
   setStatus("预览中：点击快门录制 3 秒 GIF");
   drawFrame();
+
+  // Initialize face tracking in background so preview never hangs/black-screens.
+  startJeelizInBackground();
 }
 
 async function resumePendingPreviewStart({ timeoutMs = 9000 } = {}) {
