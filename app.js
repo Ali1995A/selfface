@@ -74,15 +74,34 @@ let subtitleMode = "realtime"; // "realtime" | "stable"
 
 const effects = [
   { id: "none", name: "无特效", from: "WeChat Effect", sticker: null, thumb: "none" },
-  { id: "thanksBoss", name: "谢谢老板", from: "WeChat Effect", sticker: "./assets/stickers/glasses.png" },
-  { id: "newYear", name: "新年好", from: "MurphyM", sticker: "./assets/stickers/mustache.png" },
-  { id: "gongXiFaCai", name: "恭喜发财", from: "MurphyM", sticker: "./assets/stickers/crown.png" },
+  {
+    id: "thanksBoss",
+    name: "谢谢老板",
+    from: "WeChat Effect",
+    sticker: "./assets/stickers/glasses.png",
+    icon: { emoji: "💰", bg: "linear-gradient(135deg,#ffe37a,#ff9fd1)" },
+  },
+  {
+    id: "newYear",
+    name: "新年好",
+    from: "MurphyM",
+    sticker: "./assets/stickers/mustache.png",
+    icon: { emoji: "🧧", bg: "linear-gradient(135deg,#ff8a7a,#ffd36a)" },
+  },
+  {
+    id: "gongXiFaCai",
+    name: "恭喜发财",
+    from: "MurphyM",
+    sticker: "./assets/stickers/crown.png",
+    icon: { emoji: "👑", bg: "linear-gradient(135deg,#ffe27a,#a7ffcf)" },
+  },
   {
     id: "comedyGlasses",
     name: "搞笑眼镜",
     from: "jeelizFaceFilter",
     sticker: "./assets/templates/jeeliz/comedy-glasses.png",
     placement: { scale: 2.15, offsetX: 0, offsetY: -0.08, clamp: [140, 320] },
+    icon: { emoji: "😎", bg: "linear-gradient(135deg,#7cf0ff,#b98cff)" },
   },
   {
     id: "catFace",
@@ -90,6 +109,7 @@ const effects = [
     from: "FaceUp",
     sticker: "./assets/templates/faceup/cat.png",
     placement: { scale: 2.35, offsetX: 0, offsetY: -0.02, clamp: [140, 320] },
+    icon: { emoji: "🐱", bg: "linear-gradient(135deg,#ffd1e6,#c6fff3)" },
   },
   {
     id: "dogFace",
@@ -97,6 +117,7 @@ const effects = [
     from: "FaceUp",
     sticker: "./assets/templates/faceup/dog.png",
     placement: { scale: 2.35, offsetX: 0, offsetY: -0.02, clamp: [140, 320] },
+    icon: { emoji: "🐶", bg: "linear-gradient(135deg,#c6e8ff,#ffe5b6)" },
   },
   {
     id: "flowerBand",
@@ -104,6 +125,7 @@ const effects = [
     from: "FaceUp",
     sticker: "./assets/templates/faceup/flower_hairband.png",
     placement: { scale: 2.45, offsetX: 0, offsetY: -0.36, clamp: [160, 340] },
+    icon: { emoji: "🌸", bg: "linear-gradient(135deg,#ffb7d9,#b7f0ff)" },
   },
   {
     id: "devilHorn",
@@ -111,6 +133,7 @@ const effects = [
     from: "FaceUp",
     sticker: "./assets/templates/faceup/evil_horn_eye.png",
     placement: { scale: 2.35, offsetX: 0, offsetY: -0.32, clamp: [150, 340] },
+    icon: { emoji: "😈", bg: "linear-gradient(135deg,#ffb4ec,#a6b9ff)" },
   },
   {
     id: "eyeFx",
@@ -118,6 +141,7 @@ const effects = [
     from: "FaceUp",
     sticker: "./assets/templates/faceup/eye.png",
     placement: { scale: 2.0, offsetX: 0, offsetY: -0.02, clamp: [120, 300], alpha: 0.75 },
+    icon: { emoji: "✨", bg: "linear-gradient(135deg,#fff4a6,#b7f0ff)" },
   },
   {
     id: "baldHair",
@@ -125,6 +149,7 @@ const effects = [
     from: "FaceUp",
     sticker: "./assets/templates/faceup/bald_hair.png",
     placement: { scale: 2.6, offsetX: 0, offsetY: -0.38, clamp: [170, 360] },
+    icon: { emoji: "🧑‍🦲", bg: "linear-gradient(135deg,#ffe0d1,#d1f0ff)" },
   },
   {
     id: "skeleton",
@@ -132,6 +157,7 @@ const effects = [
     from: "FaceUp",
     sticker: "./assets/templates/faceup/skeleton_mask.png",
     placement: { scale: 2.15, offsetX: 0, offsetY: 0.06, clamp: [160, 340], alpha: 0.62 },
+    icon: { emoji: "💀", bg: "linear-gradient(135deg,#d7e2ff,#ffd6e7)" },
   },
   {
     id: "neonMask",
@@ -139,6 +165,7 @@ const effects = [
     from: "FaceUp",
     sticker: "./assets/templates/faceup/neon_facemask.png",
     placement: { scale: 2.05, offsetX: 0, offsetY: 0.1, clamp: [140, 300], alpha: 0.7 },
+    icon: { emoji: "😷", bg: "linear-gradient(135deg,#b6ffea,#b6c7ff)" },
   },
   {
     id: "bald",
@@ -146,12 +173,14 @@ const effects = [
     from: "FaceUp",
     sticker: "./assets/templates/faceup/bald.png",
     placement: { scale: 2.5, offsetX: 0, offsetY: -0.34, clamp: [160, 360] },
+    icon: { emoji: "🥚", bg: "linear-gradient(135deg,#fff0c9,#d4fff0)" },
   },
   {
     id: "edgeSparkles",
     name: "金闪闪",
     from: "selfface",
     sticker: null,
+    icon: { emoji: "🌟", bg: "linear-gradient(135deg,#ffe48a,#ffb0d9)" },
   },
   {
     id: "fireworksFrame",
@@ -159,6 +188,7 @@ const effects = [
     from: "jeelizFaceFilter",
     sticker: null,
     frame: "./assets/templates/jeeliz/frame_fireworks.png",
+    icon: { emoji: "🎆", bg: "linear-gradient(135deg,#a6d6ff,#ffb0d9)" },
   },
   {
     id: "warmVignette",
@@ -166,18 +196,21 @@ const effects = [
     from: "selfface",
     sticker: null,
     filter: "warmVignette",
+    icon: { emoji: "🧡", bg: "linear-gradient(135deg,#ffd2a6,#ffeaa6)" },
   },
   {
     id: "heartBurst",
     name: "爱心雨",
     from: "selfface",
     sticker: null,
+    icon: { emoji: "💖", bg: "linear-gradient(135deg,#ffb6d9,#ffd6f0)" },
   },
   {
     id: "bubbles",
     name: "泡泡",
     from: "selfface",
     sticker: null,
+    icon: { emoji: "🫧", bg: "linear-gradient(135deg,#b6f3ff,#d2e2ff)" },
   },
   {
     id: "rainbow",
@@ -185,6 +218,7 @@ const effects = [
     from: "selfface",
     sticker: null,
     filter: "rainbowFrame",
+    icon: { emoji: "🌈", bg: "linear-gradient(135deg,#ffb0d9,#b6f3ff)" },
   },
   { id: "more", name: "更多特效", from: "", sticker: null, thumb: "more" },
 ];
@@ -1622,7 +1656,16 @@ function makeEffectThumb(effect) {
   if (effect.thumb === "none") thumb.classList.add("wx-thumb--none");
   if (effect.thumb === "more") thumb.classList.add("wx-thumb--more");
 
-  if (effect.sticker) {
+  if (effect.icon?.bg) {
+    thumb.classList.add("wx-thumb--kid");
+    thumb.style.setProperty("--kidbg", effect.icon.bg);
+  }
+  if (effect.icon?.emoji) {
+    const emoji = document.createElement("div");
+    emoji.className = "wx-thumbEmoji";
+    emoji.textContent = effect.icon.emoji;
+    thumb.appendChild(emoji);
+  } else if (effect.sticker) {
     const img = document.createElement("img");
     img.alt = effect.name;
     img.src = effect.sticker;
@@ -1659,7 +1702,16 @@ function makeGridItem(effect) {
 
   const icon = document.createElement("div");
   icon.className = "wx-gridIcon";
-  if (effect.sticker) {
+  if (effect.icon?.bg) {
+    icon.classList.add("wx-gridIcon--kid");
+    icon.style.setProperty("--kidbg", effect.icon.bg);
+  }
+  if (effect.icon?.emoji) {
+    const emoji = document.createElement("div");
+    emoji.className = "wx-gridEmoji";
+    emoji.textContent = effect.icon.emoji;
+    icon.appendChild(emoji);
+  } else if (effect.sticker) {
     const img = document.createElement("img");
     img.alt = effect.name;
     img.src = effect.sticker;
