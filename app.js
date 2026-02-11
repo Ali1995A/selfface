@@ -2096,6 +2096,36 @@ async function weChatOpenImagePreview(url) {
   }
 }
 
+let shareHintTimer = 0;
+function hintShareImage() {
+  if (!els.shareImage) return;
+  try {
+    els.shareImage.classList.add("is-hint");
+    if (shareHintTimer) clearTimeout(shareHintTimer);
+    shareHintTimer = setTimeout(() => {
+      els.shareImage?.classList?.remove("is-hint");
+    }, 2200);
+  } catch {
+    // ignore
+  }
+}
+
+async function tryWebShareGifFile({ hint = "" } = {}) {
+  const file = gifFile();
+  if (!file) return false;
+  if (!navigator.share) return false;
+  try {
+    if (navigator.canShare && !navigator.canShare({ files: [file] })) return false;
+    await navigator.share({ files: [file], title: "selfface" });
+    if (hint) setStatus(hint);
+    return true;
+  } catch (e) {
+    if (String(e?.name || "").toLowerCase().includes("abort")) return true;
+    console.warn(e);
+    return false;
+  }
+}
+
 async function weChatShareLinkToFriend(url) {
   const link = String(url || location.href);
   const bridge = await waitWeixinBridgeReady(1500);
@@ -2821,47 +2851,40 @@ if (els.btnShareClose) {
 }
 if (els.btnShareToFriend) {
   bindTap(els.btnShareToFriend, async () => {
-    const url = els.shareImage?.src || els.gifPreview?.src || lastGifUrl || "";
-    if (!url) {
+    if (!lastGifBlob) {
       setStatus("没有可分享的图片，请先拍摄一次", "error");
       return;
     }
-    setStatus("正在打开微信图片预览…");
-    let ok = await weChatOpenImagePreview(url);
-    if (!ok && lastGifBlob) {
-      try {
-        const dataUrl = await blobToDataUrl(lastGifBlob);
-        if (dataUrl) ok = await weChatOpenImagePreview(dataUrl);
-      } catch {
-        // ignore
-      }
-    }
-    if (!ok) setStatus("打开预览失败：请长按图片选择“发送给朋友”", "error");
+
+    // 先尝试系统分享（部分 iOS / 部分微信版本支持直接发到微信好友）。
+    const ok = await tryWebShareGifFile({ hint: "已打开系统分享面板" });
+    if (ok) return;
+
+    // 避免 WeChat 的 imagePreview 黑屏：不再强制打开微信预览。
+    // 保持当前预览图可见，引导用户长按或截图发送。
+    setStatus("微信限制：请长按预览图 → 发送给朋友", "error");
+    hintShareImage();
   });
 }
 if (els.btnSaveToAlbum) {
   bindTap(els.btnSaveToAlbum, async () => {
-    const url = els.shareImage?.src || els.gifPreview?.src || lastGifUrl || "";
-    if (!url) {
+    if (!lastGifBlob) {
       setStatus("没有可保存的图片，请先拍摄一次", "error");
       return;
     }
-    // Best-effort: trigger download; in WeChat this may fail, so open preview and instruct long-press save.
+
+    // 优先尝试系统分享（可能出现“存储到相册 / 保存图片”）。
+    const ok = await tryWebShareGifFile({ hint: "请在弹出的面板中选择“存储到相册 / 保存图片”" });
+    if (ok) return;
+
+    // Best-effort: trigger download; in WeChat this may fail, so instruct long-press save.
     try {
       downloadGif();
     } catch {
       // ignore
     }
-    setStatus("已打开图片预览：长按 → 保存到相册", "error");
-    let ok = await weChatOpenImagePreview(url);
-    if (!ok && lastGifBlob) {
-      try {
-        const dataUrl = await blobToDataUrl(lastGifBlob);
-        if (dataUrl) ok = await weChatOpenImagePreview(dataUrl);
-      } catch {
-        // ignore
-      }
-    }
+    setStatus("微信限制：请长按预览图 → 保存到相册", "error");
+    hintShareImage();
   });
 }
 
