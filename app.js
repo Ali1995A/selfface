@@ -70,6 +70,7 @@ const ctx = els.canvas.getContext("2d", { alpha: false, desynchronized: true });
 
 let mediaStream = null;
 let micStream = null;
+let micRequestPromise = null;
 let faceState = null;
 let faceSmooth = null; // { x,y,s,rz,detected,lastMs,lastSeenMs }
 let rafId = 0;
@@ -734,6 +735,15 @@ function preloadImage(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.decoding = "async";
+    const to = setTimeout(() => {
+      cleanup();
+      reject(new Error("image load timeout"));
+    }, 8000);
+    const cleanup = () => {
+      clearTimeout(to);
+      img.onload = null;
+      img.onerror = null;
+    };
     img.onload = async () => {
       // Ensure Safari has decoded the image before we try drawImage during animation frames.
       try {
@@ -741,9 +751,13 @@ function preloadImage(src) {
       } catch {
         // ignore decode failures; drawImage may still work
       }
+      cleanup();
       resolve(img);
     };
-    img.onerror = reject;
+    img.onerror = (e) => {
+      cleanup();
+      reject(e);
+    };
     img.src = src;
   });
 }
@@ -785,6 +799,46 @@ async function preloadStickers() {
   stickerReady = true;
 }
 
+function startMicRequestInBackground() {
+  if (micRequestPromise) return micRequestPromise;
+  if (!navigator.mediaDevices?.getUserMedia) return Promise.resolve(null);
+
+  micRequestPromise = navigator.mediaDevices
+    .getUserMedia({ audio: true, video: false })
+    .then((audioStream) => {
+      const tracks = audioStream.getAudioTracks();
+      if (!tracks.length) return null;
+      const [track] = tracks;
+
+      stopTracks(micStream);
+      micStream = new MediaStream([track]);
+      hasMic = true;
+
+      // Attach to the main stream too (if missing), so downstream code sees audio present.
+      try {
+        if (streamIsLive(mediaStream) && mediaStream.getAudioTracks().length === 0) {
+          mediaStream.addTrack(track);
+        }
+      } catch {
+        // ignore
+      }
+
+      return micStream;
+    })
+    .catch((e) => {
+      console.warn(e);
+      return null;
+    })
+    .finally(() => {
+      // If we didn't get a live mic track, allow retry later.
+      if (!streamIsLive(micStream) || micStream.getAudioTracks().length === 0) {
+        micRequestPromise = null;
+      }
+    });
+
+  return micRequestPromise;
+}
+
 function stopTracks(stream) {
   if (!stream) return;
   for (const t of stream.getTracks()) t.stop();
@@ -815,23 +869,16 @@ async function requestMedia(facingMode) {
   }
 
   // iOS / some WebViews can be flaky when requesting camera+mic in a single call.
-  // Request camera first (to ensure preview starts), then request mic separately.
-  // This also avoids the case where mic denial/constraints cause a black preview.
+  // Request camera first (to ensure preview starts). Request mic separately in background
+  // (avoids hanging the whole init flow if the mic prompt is delayed/suppressed).
   const videoStream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: facingMode || "user" },
     audio: false,
   });
 
-  let audioStream = null;
-  try {
-    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-  } catch {
-    audioStream = null;
-  }
-
-  const tracks = [...videoStream.getVideoTracks()];
-  if (audioStream) tracks.push(...audioStream.getAudioTracks());
-  return new MediaStream(tracks);
+  const stream = new MediaStream([...videoStream.getVideoTracks()]);
+  startMicRequestInBackground();
+  return stream;
 }
 
 function streamIsLive(stream) {
@@ -860,6 +907,7 @@ async function ensureMediaStream() {
   const audioTracks = stream.getAudioTracks();
   hasMic = audioTracks.length > 0;
   micStream = hasMic ? new MediaStream(audioTracks) : null;
+  if (!hasMic) startMicRequestInBackground();
   return stream;
 }
 
@@ -869,18 +917,9 @@ async function ensureMicOnlyStream() {
     hasMic = true;
     return micStream;
   }
-  try {
-    const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    const tracks = audioStream.getAudioTracks();
-    if (!tracks.length) return null;
-    stopTracks(micStream);
-    micStream = new MediaStream([tracks[0]]);
-    hasMic = true;
-    return micStream;
-  } catch (e) {
-    console.warn(e);
-    return null;
-  }
+  const s = await startMicRequestInBackground();
+  if (streamIsLive(s) && s.getAudioTracks().length > 0) return s;
+  return null;
 }
 
 function waitForVideoReady(videoEl) {
@@ -1422,6 +1461,7 @@ function stopPreview() {
   stopTracks(micStream);
   mediaStream = null;
   micStream = null;
+  micRequestPromise = null;
   hasMic = false;
   lastStreamFacingMode = null;
   faceState = null;
@@ -2036,11 +2076,21 @@ async function startPreview() {
     // Stickers missing shouldn't block preview.
   }
 
+  let gotStream = false;
+  const permHintTo = setTimeout(() => {
+    if (gotStream) return;
+    setProgress("如果没有弹出授权弹窗：请检查 iPad/微信的摄像头与麦克风权限，然后点按页面任意位置再试");
+  }, 2500);
+
   try {
     mediaStream = await ensureMediaStream();
+    gotStream = true;
   } catch (err) {
     setStatus(`权限被拒绝或设备不可用：${err?.message || err}`, "error");
+    clearTimeout(permHintTo);
     return;
+  } finally {
+    clearTimeout(permHintTo);
   }
 
   if (!hasMic) setProgress("提示：未获得麦克风权限，字幕/转写可能不可用");
@@ -2760,8 +2810,8 @@ async function autoRequestPermissionsOnLoad() {
   if (hasRequestedPermissions) return;
   try {
     // Request permissions on load, and try to start preview immediately.
-    await ensureMediaStream();
-    setStatus("已获取权限：正在启动预览…");
+    // Don't call ensureMediaStream() here (startPreview() will do it). This avoids an "init stuck"
+    // state if the mic prompt is delayed/suppressed in some iPad/WeChat WebViews.
     await startPreview();
     // If preview still can't start (iOS gesture restriction), keep status only (no overlay).
     if (!isPreviewing && streamIsLive(mediaStream)) pendingPreviewStart = true;
