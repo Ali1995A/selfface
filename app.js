@@ -767,30 +767,24 @@ async function requestMedia(facingMode) {
     throw new Error("当前浏览器不支持 getUserMedia（无法调用摄像头/麦克风）。");
   }
 
-  const constraints = {
+  // iOS / some WebViews can be flaky when requesting camera+mic in a single call.
+  // Request camera first (to ensure preview starts), then request mic separately.
+  // This also avoids the case where mic denial/constraints cause a black preview.
+  const videoStream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: facingMode || "user" },
-    audio: true,
-  };
+    audio: false,
+  });
 
-  const stream = await navigator.mediaDevices.getUserMedia(constraints);
-
-  // iPad Safari / some WebViews may return a video-only stream even if audio:true.
-  // Try a second explicit audio-only request to force the mic permission prompt and obtain an audio track.
-  if (stream.getAudioTracks().length === 0) {
-    try {
-      const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      const [audioTrack] = audioStream.getAudioTracks();
-      if (audioTrack) stream.addTrack(audioTrack);
-      // Stop any extra tracks from the audio-only stream (we only keep the adopted audioTrack).
-      for (const t of audioStream.getTracks()) {
-        if (t !== audioTrack) t.stop();
-      }
-    } catch {
-      // ignore: we'll keep running with video-only
-    }
+  let audioStream = null;
+  try {
+    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  } catch {
+    audioStream = null;
   }
 
-  return stream;
+  const tracks = [...videoStream.getVideoTracks()];
+  if (audioStream) tracks.push(...audioStream.getAudioTracks());
+  return new MediaStream(tracks);
 }
 
 function streamIsLive(stream) {
