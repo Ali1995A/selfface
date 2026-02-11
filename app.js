@@ -143,7 +143,7 @@ const effects = [
     name: "猫猫",
     from: "FaceUp",
     sticker: "./assets/templates/faceup/cat.png",
-    placement: { scale: 2.35, offsetX: 0, offsetY: -0.02, clamp: [140, 320] },
+    placement: { scale: 2.18, offsetX: 0, offsetY: -0.11, clamp: [140, 320] },
     icon: { emoji: "🐱", bg: "linear-gradient(135deg,#ffd1e6,#c6fff3)" },
   },
   {
@@ -151,7 +151,7 @@ const effects = [
     name: "狗狗",
     from: "FaceUp",
     sticker: "./assets/templates/faceup/dog.png",
-    placement: { scale: 2.35, offsetX: 0, offsetY: -0.02, clamp: [140, 320] },
+    placement: { scale: 2.18, offsetX: 0, offsetY: -0.11, clamp: [140, 320] },
     icon: { emoji: "🐶", bg: "linear-gradient(135deg,#c6e8ff,#ffe5b6)" },
   },
   {
@@ -971,12 +971,53 @@ const FACE_DETECT_UPDATE_TH = 0.45; // start/keep updating smoother
 const FACE_RENDER_TH = 0.55; // draw stickers/face-locked effects
 const FACE_LOST_HOLD_MS = 380; // keep last face for a short time when detection drops
 
+function getVideoSquareCrop(videoEl) {
+  const vw = videoEl?.videoWidth || 0;
+  const vh = videoEl?.videoHeight || 0;
+  if (!vw || !vh) return null;
+  const side = Math.min(vw, vh);
+  const sx = (vw - side) * 0.5;
+  const sy = (vh - side) * 0.5;
+  return { vw, vh, side, sx, sy };
+}
+
 function rawFaceToCanvasTransform(state) {
-  // state.x, state.y in [-1,1], origin center; state.s is scale.
-  // With flipX=true, x already matches mirrored output.
-  const x = (state.x * 0.5 + 0.5) * OUTPUT_SIZE;
-  const y = (state.y * -0.5 + 0.5) * OUTPUT_SIZE;
-  const s = state.s * OUTPUT_SIZE; // rough
+  // `detectState` coords are in [-1,1] with origin at center in the VIDEO space.
+  // Our render pipeline center-crops the video to a square. Depending on the Jeeliz build/config,
+  // the returned coordinates may be based on the full video or an internal square crop.
+  // To be robust across iOS Safari / WeChat WebView variants, we blend between:
+  // - simple mapping (assumes Jeeliz already uses a square crop)
+  // - crop-aware mapping (assumes Jeeliz uses full video coords)
+  const crop = getVideoSquareCrop(els.video);
+  if (!crop) {
+    // Fallback: assume a square view.
+    const x = (state.x * 0.5 + 0.5) * OUTPUT_SIZE;
+    const y = (state.y * -0.5 + 0.5) * OUTPUT_SIZE;
+    const s = state.s * OUTPUT_SIZE;
+    const rz = state.rz || 0;
+    return { x, y, s, rz };
+  }
+
+  const { vw, vh, side, sx, sy } = crop;
+
+  // Simple (already-square) mapping
+  const x0 = (state.x * 0.5 + 0.5) * OUTPUT_SIZE;
+  const y0 = (state.y * -0.5 + 0.5) * OUTPUT_SIZE;
+
+  // Crop-aware mapping
+  const vx = (state.x * 0.5 + 0.5) * vw;
+  const vy = (0.5 - state.y * 0.5) * vh;
+  const x1 = ((vx - sx) / side) * OUTPUT_SIZE;
+  const y1 = ((vy - sy) / side) * OUTPUT_SIZE;
+
+  // Blend factor by aspect ratio (more non-square -> rely more on crop-aware mapping)
+  const aspect = Math.max(vw, vh) / Math.min(vw, vh);
+  const k = clamp((aspect - 1) / 0.55, 0, 1);
+  const x = clamp(lerp(x0, x1, k), -OUTPUT_SIZE * 0.25, OUTPUT_SIZE * 1.25);
+  const y = clamp(lerp(y0, y1, k), -OUTPUT_SIZE * 0.25, OUTPUT_SIZE * 1.25);
+
+  // Keep scale conservative (oversize stickers look "off" on iPad); rely on per-effect placement clamp.
+  const s = state.s * OUTPUT_SIZE;
   const rz = state.rz || 0;
   return { x, y, s, rz };
 }
