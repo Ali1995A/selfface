@@ -12,6 +12,22 @@ const COI_SW_URL = "./coi-sw.js";
 const COI_RELOAD_KEY = "selfface_coi_reloaded_at";
 const COI_FAILED_KEY = "selfface_coi_failed";
 
+const BEAUTY = {
+  enabled: true,
+  // Cheap GPU-ish filter applied during video draw (if supported).
+  videoFilter: "brightness(1.14) contrast(1.06) saturate(1.10)",
+  // Soft overlays (very cheap; avoids per-pixel processing).
+  softLightStrength: 0.06,
+  warmTintStrength: 0.045,
+  faceBrightStrength: 0.22,
+  // Makeup (approx mouth region based on face box; no landmarks).
+  lipstick: {
+    enabled: true,
+    color: "rgba(210, 45, 80, 0.62)",
+    strength: 0.62,
+  },
+};
+
 const els = {
   canvas: document.getElementById("outputCanvas"),
   status: document.getElementById("statusLine"),
@@ -931,6 +947,92 @@ function particleAlphaOutsideFace(x, y, baseAlpha) {
   return baseAlpha * (0.06 + 0.94 * keep);
 }
 
+function clipEllipse(context, x, y, rx, ry) {
+  context.beginPath();
+  context.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+  context.clip();
+}
+
+function drawBeautyOverlay(context, nowMs) {
+  if (!BEAUTY.enabled) return;
+
+  // Global "soft" whitening (very subtle)
+  context.save();
+  context.globalCompositeOperation = "soft-light";
+  context.globalAlpha = clamp(BEAUTY.softLightStrength, 0, 0.3);
+  context.fillStyle = "rgba(255,255,255,1)";
+  context.fillRect(0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
+
+  // Warm tint (gives nicer skin tone on iPad camera)
+  context.globalCompositeOperation = "overlay";
+  context.globalAlpha = clamp(BEAUTY.warmTintStrength, 0, 0.25);
+  context.fillStyle = "rgba(255, 180, 200, 1)";
+  context.fillRect(0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
+  context.restore();
+
+  // Face-only brightness lift (avoid brightening background too much)
+  const face = getFaceRegion();
+  if (!face) return;
+  context.save();
+  clipEllipse(context, face.x, face.y, face.rx, face.ry);
+  context.globalCompositeOperation = "screen";
+  context.globalAlpha = clamp(BEAUTY.faceBrightStrength, 0, 0.8);
+  const g = context.createRadialGradient(face.x, face.y - face.ry * 0.2, face.rx * 0.2, face.x, face.y, face.rx * 1.2);
+  g.addColorStop(0, "rgba(255,255,255,0.9)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  context.fillStyle = g;
+  context.fillRect(face.x - face.rx - 10, face.y - face.ry - 10, (face.rx + 10) * 2, (face.ry + 10) * 2);
+  context.restore();
+}
+
+function drawLipstick(context, nowMs) {
+  if (!BEAUTY.enabled || !BEAUTY.lipstick?.enabled) return;
+  if (!faceState || !faceState.detected || faceState.detected < 0.6) return;
+
+  const { x, y, s, rz } = faceToCanvasTransform(faceState);
+  // Approx mouth region: slightly below face center.
+  const mouthY = y + clamp(s * 0.23, 18, 62);
+  const mouthW = clamp(s * 0.44, 54, 118);
+  const mouthH = clamp(mouthW * 0.24, 14, 28);
+
+  const strength = clamp(BEAUTY.lipstick.strength, 0, 1);
+  const baseAlpha = 0.38 * strength;
+  const edgeAlpha = 0.22 * strength;
+
+  context.save();
+  context.translate(x, mouthY);
+  context.rotate(rz);
+
+  // Main tint (multiply looks more like makeup on top of video)
+  context.globalCompositeOperation = "multiply";
+  const r = Math.max(1, mouthW * 0.5);
+  const g = context.createRadialGradient(0, 0, 0, 0, 0, r);
+  g.addColorStop(0, BEAUTY.lipstick.color);
+  g.addColorStop(1, "rgba(210, 45, 80, 0)");
+  context.globalAlpha = baseAlpha;
+  context.fillStyle = g;
+  context.beginPath();
+  context.ellipse(0, 0, mouthW * 0.5, mouthH * 0.62, 0, 0, Math.PI * 2);
+  context.fill();
+
+  // Slightly sharper inner lip area
+  context.globalAlpha = edgeAlpha;
+  context.fillStyle = "rgba(175, 20, 55, 1)";
+  context.beginPath();
+  context.ellipse(0, mouthH * 0.06, mouthW * 0.46, mouthH * 0.44, 0, 0, Math.PI * 2);
+  context.fill();
+
+  // Highlight
+  context.globalCompositeOperation = "screen";
+  context.globalAlpha = 0.10 * strength;
+  context.fillStyle = "rgba(255,255,255,1)";
+  context.beginPath();
+  context.ellipse(-mouthW * 0.16, -mouthH * 0.18, mouthW * 0.12, mouthH * 0.16, 0, 0, Math.PI * 2);
+  context.fill();
+
+  context.restore();
+}
+
 function drawSticker(context) {
   if (!stickerReady || !stickerImg) return;
   if (!faceState || !faceState.detected || faceState.detected < 0.6) return;
@@ -972,15 +1074,22 @@ function drawFrame() {
       ctx.translate(cw, 0);
       ctx.scale(-1, 1);
     }
+    // Beauty filter (if supported by the browser).
+    const canFilter = "filter" in ctx;
+    if (BEAUTY.enabled && canFilter) ctx.filter = BEAUTY.videoFilter;
     ctx.drawImage(v, sx, sy, side, side, 0, 0, cw, ch);
+    if (canFilter) ctx.filter = "none";
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   } else {
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, cw, ch);
   }
 
+  const now = performance.now();
+  drawBeautyOverlay(ctx, now);
+  drawLipstick(ctx, now);
   drawSticker(ctx);
-  drawEffectOverlay(ctx, performance.now());
+  drawEffectOverlay(ctx, now);
   drawFrameOverlay(ctx);
   drawSubtitle(ctx, captionText);
 
