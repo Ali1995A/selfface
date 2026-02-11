@@ -845,11 +845,21 @@ function stopTracks(stream) {
 }
 
 function attachStreamToVideo(stream) {
-  els.video.srcObject = stream;
-  els.video.muted = true;
-  els.video.playsInline = true;
-  // Note: iOS may reject play() without a user gesture; we handle retries elsewhere.
-  return els.video.play().catch(() => {});
+  const v = els.video;
+  // Set flags before assigning srcObject (iOS Safari can be picky).
+  v.muted = true;
+  v.playsInline = true;
+  v.autoplay = true;
+  try {
+    v.setAttribute("playsinline", "");
+    v.setAttribute("muted", "");
+    v.setAttribute("autoplay", "");
+  } catch {
+    // ignore
+  }
+  v.srcObject = stream;
+  // Note: iOS may reject play() without a user gesture; we will retry.
+  v.play().catch(() => {});
 }
 
 function tryResumeVideoPlayback() {
@@ -876,9 +886,7 @@ async function requestMedia(facingMode) {
     audio: false,
   });
 
-  const stream = new MediaStream([...videoStream.getVideoTracks()]);
-  startMicRequestInBackground();
-  return stream;
+  return new MediaStream([...videoStream.getVideoTracks()]);
 }
 
 function streamIsLive(stream) {
@@ -907,7 +915,6 @@ async function ensureMediaStream() {
   const audioTracks = stream.getAudioTracks();
   hasMic = audioTracks.length > 0;
   micStream = hasMic ? new MediaStream(audioTracks) : null;
-  if (!hasMic) startMicRequestInBackground();
   return stream;
 }
 
@@ -922,27 +929,26 @@ async function ensureMicOnlyStream() {
   return null;
 }
 
-function waitForVideoReady(videoEl) {
+async function ensureVideoReady(videoEl, { timeoutMs = 12000 } = {}) {
+  const start = performance.now();
+  let lastPlayTry = 0;
+
+  const tryPlay = () => {
+    const now = performance.now();
+    if (now - lastPlayTry < 450) return;
+    lastPlayTry = now;
+    tryResumeVideoPlayback();
+  };
+
   return new Promise((resolve, reject) => {
-    if (videoEl.videoWidth > 0) return resolve();
-    const to = setTimeout(() => reject(new Error("摄像头初始化超时")), 8000);
-    const onReady = () => {
-      if (videoEl.videoWidth > 0) {
-        clearTimeout(to);
-        cleanup();
-        resolve();
-      }
+    const tick = () => {
+      if (videoEl.videoWidth > 0 && videoEl.videoHeight > 0) return resolve();
+      if (performance.now() - start > timeoutMs) return reject(new Error("摄像头初始化超时"));
+      tryPlay();
+      requestAnimationFrame(tick);
     };
-    const cleanup = () => {
-      videoEl.removeEventListener("loadedmetadata", onReady);
-      videoEl.removeEventListener("loadeddata", onReady);
-      videoEl.removeEventListener("canplay", onReady);
-      videoEl.removeEventListener("timeupdate", onReady);
-    };
-    videoEl.addEventListener("loadedmetadata", onReady);
-    videoEl.addEventListener("loadeddata", onReady);
-    videoEl.addEventListener("canplay", onReady);
-    videoEl.addEventListener("timeupdate", onReady);
+    tryPlay();
+    tick();
   });
 }
 
@@ -2093,11 +2099,9 @@ async function startPreview() {
     clearTimeout(permHintTo);
   }
 
-  if (!hasMic) setProgress("提示：未获得麦克风权限，字幕/转写可能不可用");
-
   try {
-    await attachStreamToVideo(mediaStream);
-    await waitForVideoReady(els.video);
+    attachStreamToVideo(mediaStream);
+    await ensureVideoReady(els.video, { timeoutMs: 15000 });
   } catch (err) {
     // Common on iOS: permission granted but playback needs user gesture.
     pendingPreviewStart = true;
@@ -2105,6 +2109,9 @@ async function startPreview() {
     isPreviewing = false;
     return;
   }
+
+  // After preview is running, request mic in background (won't block preview).
+  startMicRequestInBackground();
 
   try {
     await initJeelizFaceFilter();
@@ -2823,6 +2830,7 @@ async function autoRequestPermissionsOnLoad() {
 function onAnyUserGesture() {
   // Help iOS Safari/WebViews start <video> playback and any audio processing.
   tryResumeVideoPlayback();
+  if (!hasMic) startMicRequestInBackground();
 
   // If whisper engine needs a one-time COI reload, do it only after a user gesture (avoid "auto refresh").
   if (pendingCoiReload && !crossOriginIsolated && !coiFailed()) {

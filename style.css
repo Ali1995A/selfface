@@ -10,6 +10,9 @@
   --radiusSheet:24px;
 }
 
+/* Ensure HTML `hidden` always wins (prevents "result panel" leaking into default view) */
+[hidden]{display:none !important;}
+
 *{box-sizing:border-box}
 html,body{height:100%}
 body{
@@ -536,10 +539,12 @@ button{font:inherit}
 /* Hidden elements (video/jeeliz canvas) */
 #inputVideo,#jeelizCanvas{
   position:fixed;
-  left:-9999px;
-  top:-9999px;
+  left:0;
+  top:0;
   width:1px;height:1px;
   opacity:0;
+  pointer-events:none;
+  z-index:-1;
 }
 
 /* iPhone portrait: tighter spacing, bigger usable preview */
