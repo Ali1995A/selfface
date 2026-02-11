@@ -56,6 +56,7 @@ let stickerImg = null;
 let stickerReady = false;
 let imageCache = new Map(); // url -> Image
 let currentEffect = null;
+let frameImg = null;
 
 let captionText = "";
 let captionSource = "none"; // "webspeech" | "whisper" | "none"
@@ -69,6 +70,13 @@ const effects = [
   { id: "thanksBoss", name: "谢谢老板", from: "WeChat Effect", sticker: "./assets/stickers/glasses.png" },
   { id: "newYear", name: "新年好", from: "MurphyM", sticker: "./assets/stickers/mustache.png" },
   { id: "gongXiFaCai", name: "恭喜发财", from: "MurphyM", sticker: "./assets/stickers/crown.png" },
+  {
+    id: "comedyGlasses",
+    name: "搞笑眼镜",
+    from: "jeelizFaceFilter",
+    sticker: "./assets/templates/jeeliz/comedy-glasses.png",
+    placement: { scale: 2.15, offsetX: 0, offsetY: -0.08, clamp: [140, 320] },
+  },
   {
     id: "catFace",
     name: "猫猫",
@@ -91,18 +99,39 @@ const effects = [
     placement: { scale: 2.45, offsetX: 0, offsetY: -0.36, clamp: [160, 340] },
   },
   {
+    id: "devilHorn",
+    name: "小恶魔",
+    from: "FaceUp",
+    sticker: "./assets/templates/faceup/evil_horn_eye.png",
+    placement: { scale: 2.35, offsetX: 0, offsetY: -0.32, clamp: [150, 340] },
+  },
+  {
+    id: "eyeFx",
+    name: "眼神",
+    from: "FaceUp",
+    sticker: "./assets/templates/faceup/eye.png",
+    placement: { scale: 2.0, offsetX: 0, offsetY: -0.02, clamp: [120, 300], alpha: 0.75 },
+  },
+  {
+    id: "baldHair",
+    name: "秃一点",
+    from: "FaceUp",
+    sticker: "./assets/templates/faceup/bald_hair.png",
+    placement: { scale: 2.6, offsetX: 0, offsetY: -0.38, clamp: [170, 360] },
+  },
+  {
     id: "skeleton",
     name: "骷髅面具",
     from: "FaceUp",
     sticker: "./assets/templates/faceup/skeleton_mask.png",
-    placement: { scale: 2.25, offsetX: 0, offsetY: 0.06, clamp: [160, 340] },
+    placement: { scale: 2.15, offsetX: 0, offsetY: 0.06, clamp: [160, 340], alpha: 0.62 },
   },
   {
     id: "neonMask",
     name: "霓虹口罩",
     from: "FaceUp",
     sticker: "./assets/templates/faceup/neon_facemask.png",
-    placement: { scale: 2.1, offsetX: 0, offsetY: 0.1, clamp: [140, 300] },
+    placement: { scale: 2.05, offsetX: 0, offsetY: 0.1, clamp: [140, 300], alpha: 0.7 },
   },
   {
     id: "bald",
@@ -110,6 +139,26 @@ const effects = [
     from: "FaceUp",
     sticker: "./assets/templates/faceup/bald.png",
     placement: { scale: 2.5, offsetX: 0, offsetY: -0.34, clamp: [160, 360] },
+  },
+  {
+    id: "edgeSparkles",
+    name: "金闪闪",
+    from: "selfface",
+    sticker: null,
+  },
+  {
+    id: "fireworksFrame",
+    name: "烟花框",
+    from: "jeelizFaceFilter",
+    sticker: null,
+    frame: "./assets/templates/jeeliz/frame_fireworks.png",
+  },
+  {
+    id: "warmVignette",
+    name: "暖色",
+    from: "selfface",
+    sticker: null,
+    filter: "warmVignette",
   },
   { id: "more", name: "更多特效", from: "", sticker: null, thumb: "more" },
 ];
@@ -176,15 +225,15 @@ function drawEffectOverlay(context, nowMs) {
     // Money background: subtle drifting banknotes behind.
     context.save();
     for (const b of effectState.particles) {
-      const dx = Math.sin(t * b.w + b.p) * 6;
-      const dy = Math.cos(t * b.w + b.p) * 6;
+      const dx = Math.sin(t * b.w + b.p) * 5;
+      const dy = Math.cos(t * b.w + b.p) * 5;
       const x = b.x + dx;
       const y = b.y + dy;
       context.save();
       context.translate(x, y);
       context.rotate(b.r);
       context.scale(b.s, b.s);
-      context.globalAlpha = 0.9;
+      context.globalAlpha = particleAlphaOutsideFace(x, y, 0.42);
       // bill
       context.fillStyle = "rgba(120, 200, 140, 0.65)";
       context.strokeStyle = "rgba(40, 120, 70, 0.55)";
@@ -216,7 +265,7 @@ function drawEffectOverlay(context, nowMs) {
     drawWeChatText(context, "谢谢老板", {
       x: OUTPUT_SIZE / 2,
       y: OUTPUT_SIZE - 52,
-      fontSize: 50,
+      fontSize: 48,
       fill: "#ffffff",
       stroke: "#000000",
       strokeW: 12,
@@ -230,11 +279,11 @@ function drawEffectOverlay(context, nowMs) {
     context.save();
     for (const p of effectState.particles) {
       const yy = ((p.y + t * p.v) % (OUTPUT_SIZE + 120)) - 60;
-      const xx = p.x + Math.sin(t * 1.2 + p.p) * 10;
+      const xx = p.x + Math.sin(t * 1.2 + p.p) * 8;
       context.save();
       context.translate(xx, yy);
       context.rotate(p.r);
-      context.globalAlpha = 0.92;
+      context.globalAlpha = particleAlphaOutsideFace(xx, yy, 0.62);
       context.fillStyle = "rgba(185, 30, 30, 0.98)";
       context.strokeStyle = "rgba(120, 10, 10, 0.85)";
       context.lineWidth = 3;
@@ -246,15 +295,19 @@ function drawEffectOverlay(context, nowMs) {
       context.restore();
     }
 
-    // Big text
-    drawWeChatText(context, "新年好", {
-      x: OUTPUT_SIZE / 2,
-      y: OUTPUT_SIZE * 0.68,
-      fontSize: 86,
-      fill: "#b21d1d",
-      stroke: "#f2c25c",
-      strokeW: 14,
-    });
+    // Text: show briefly / lower area to avoid fully covering face
+    const textAlpha = 1 - smoothstep(0.6, 1.4, t); // fade out after ~1s
+    if (textAlpha > 0.02) {
+      context.globalAlpha = 0.9 * textAlpha;
+      drawWeChatText(context, "新年好", {
+        x: OUTPUT_SIZE / 2,
+        y: OUTPUT_SIZE * 0.76,
+        fontSize: 72,
+        fill: "#b21d1d",
+        stroke: "#f2c25c",
+        strokeW: 12,
+      });
+    }
     context.restore();
     return;
   }
@@ -265,7 +318,7 @@ function drawEffectOverlay(context, nowMs) {
     for (const s of effectState.particles) {
       const phase = t * s.v + s.p;
       const alpha = 0.25 + 0.35 * (0.5 + 0.5 * Math.sin(phase));
-      context.globalAlpha = alpha;
+      context.globalAlpha = particleAlphaOutsideFace(s.x, s.y, alpha);
       context.fillStyle = "rgba(255, 210, 80, 0.9)";
       context.beginPath();
       context.ellipse(s.x, s.y, 3 + 3 * (0.5 + 0.5 * Math.sin(phase)), 3, 0, 0, Math.PI * 2);
@@ -279,6 +332,23 @@ function drawEffectOverlay(context, nowMs) {
       stroke: "#000000",
       strokeW: 12,
     });
+    context.restore();
+    return;
+  }
+
+  if (id === "edgeSparkles") {
+    context.save();
+    for (const s of effectState.particles) {
+      const phase = t * s.v + s.p;
+      const alpha = 0.08 + 0.22 * (0.5 + 0.5 * Math.sin(phase));
+      const x = s.x + Math.sin(phase) * 6;
+      const y = s.y + Math.cos(phase) * 6;
+      context.globalAlpha = particleAlphaOutsideFace(x, y, alpha);
+      context.fillStyle = "rgba(255, 210, 80, 0.95)";
+      context.beginPath();
+      context.ellipse(x, y, 2.2, 2.2, 0, 0, Math.PI * 2);
+      context.fill();
+    }
     context.restore();
   }
 }
@@ -300,6 +370,11 @@ function clamp(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v));
 }
 
+function smoothstep(edge0, edge1, x) {
+  const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
 function preloadImage(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -311,8 +386,8 @@ function preloadImage(src) {
 
 async function preloadStickers() {
   const sources = effects
-    .filter((e) => typeof e.sticker === "string" && e.sticker)
-    .map((e) => e.sticker);
+    .flatMap((e) => [e.sticker, e.frame])
+    .filter((s) => typeof s === "string" && s);
   const uniq = Array.from(new Set(sources));
   const res = await Promise.allSettled(uniq.map((s) => preloadImage(s)));
   for (let i = 0; i < uniq.length; i++) {
@@ -525,6 +600,24 @@ function faceToCanvasTransform(state) {
   return { x, y, s, rz };
 }
 
+function getFaceRegion() {
+  if (!faceState || !faceState.detected || faceState.detected < 0.6) return null;
+  const { x, y, s } = faceToCanvasTransform(faceState);
+  const rx = clamp(s * 0.75, 70, 155);
+  const ry = clamp(s * 0.95, 90, 190);
+  return { x, y, rx, ry };
+}
+
+function particleAlphaOutsideFace(x, y, baseAlpha) {
+  const face = getFaceRegion();
+  if (!face) return baseAlpha;
+  const dx = (x - face.x) / face.rx;
+  const dy = (y - face.y) / face.ry;
+  const d = Math.sqrt(dx * dx + dy * dy); // ~1 at ellipse boundary
+  const keep = smoothstep(0.9, 1.25, d); // 0 near center, 1 outside
+  return baseAlpha * (0.06 + 0.94 * keep);
+}
+
 function drawSticker(context) {
   if (!stickerReady || !stickerImg) return;
   if (!faceState || !faceState.detected || faceState.detected < 0.6) return;
@@ -536,6 +629,7 @@ function drawSticker(context) {
   const h = (w / stickerImg.width) * stickerImg.height;
 
   context.save();
+  if (typeof placement.alpha === "number") context.globalAlpha = clamp(placement.alpha, 0, 1);
   context.translate(x + s * (placement.offsetX || 0), y + s * (placement.offsetY || -0.08));
   context.rotate(rz);
   context.drawImage(stickerImg, -w / 2, -h / 2, w, h);
@@ -574,11 +668,45 @@ function drawFrame() {
 
   drawSticker(ctx);
   drawEffectOverlay(ctx, performance.now());
+  drawFrameOverlay(ctx);
   drawSubtitle(ctx, captionText);
 
   ctx.restore();
 
   rafId = requestAnimationFrame(drawFrame);
+}
+
+function drawFrameOverlay(context) {
+  // Color filters / vignette (minimal face occlusion)
+  if (currentEffect?.filter === "warmVignette") {
+    context.save();
+    context.globalAlpha = 0.14;
+    context.fillStyle = "#ffb36a";
+    context.fillRect(0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
+
+    const g = context.createRadialGradient(
+      OUTPUT_SIZE / 2,
+      OUTPUT_SIZE / 2,
+      OUTPUT_SIZE * 0.15,
+      OUTPUT_SIZE / 2,
+      OUTPUT_SIZE / 2,
+      OUTPUT_SIZE * 0.75,
+    );
+    g.addColorStop(0, "rgba(0,0,0,0)");
+    g.addColorStop(1, "rgba(0,0,0,0.36)");
+    context.globalAlpha = 1;
+    context.fillStyle = g;
+    context.fillRect(0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
+    context.restore();
+  }
+
+  // Frame image (e.g., fireworks border)
+  if (frameImg) {
+    context.save();
+    context.globalAlpha = 0.95;
+    context.drawImage(frameImg, 0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
+    context.restore();
+  }
 }
 
 function stopPreview() {
@@ -1178,6 +1306,7 @@ function setEffect(effectId) {
   els.effectFromName.textContent = eff.from || "WeChat Effect";
 
   stickerImg = eff.sticker ? imageCache.get(eff.sticker) || null : null;
+  frameImg = eff.frame ? imageCache.get(eff.frame) || null : null;
 
   // Effect overlay state
   effectState = {
@@ -1188,7 +1317,7 @@ function setEffect(effectId) {
   };
   const rnd = seededRandom(effectState.seed);
   if (eff.id === "thanksBoss") {
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < 10; i++) {
       effectState.particles.push({
         x: rnd() * OUTPUT_SIZE,
         y: rnd() * OUTPUT_SIZE,
@@ -1199,7 +1328,7 @@ function setEffect(effectId) {
       });
     }
   } else if (eff.id === "newYear") {
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 8; i++) {
       effectState.particles.push({
         x: rnd() * OUTPUT_SIZE,
         y: rnd() * (OUTPUT_SIZE + 120),
@@ -1209,11 +1338,37 @@ function setEffect(effectId) {
       });
     }
   } else if (eff.id === "gongXiFaCai") {
-    for (let i = 0; i < 26; i++) {
+    for (let i = 0; i < 18; i++) {
       effectState.particles.push({
         x: rnd() * OUTPUT_SIZE,
         y: rnd() * OUTPUT_SIZE * 0.9,
         v: 1.8 + rnd() * 2.8,
+        p: rnd() * Math.PI * 2,
+      });
+    }
+  } else if (eff.id === "edgeSparkles") {
+    for (let i = 0; i < 22; i++) {
+      const edge = Math.floor(rnd() * 4);
+      const m = 10 + rnd() * 16;
+      let x = m;
+      let y = m;
+      if (edge === 0) {
+        x = m;
+        y = rnd() * OUTPUT_SIZE;
+      } else if (edge === 1) {
+        x = OUTPUT_SIZE - m;
+        y = rnd() * OUTPUT_SIZE;
+      } else if (edge === 2) {
+        x = rnd() * OUTPUT_SIZE;
+        y = m;
+      } else {
+        x = rnd() * OUTPUT_SIZE;
+        y = OUTPUT_SIZE - m;
+      }
+      effectState.particles.push({
+        x,
+        y,
+        v: 1.4 + rnd() * 2.3,
         p: rnd() * Math.PI * 2,
       });
     }
