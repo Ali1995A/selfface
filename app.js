@@ -60,7 +60,7 @@ const els = {
   emojiFile: document.getElementById("emojiFile"),
 };
 
-const ctx = els.canvas.getContext("2d", { alpha: false, desynchronized: true });
+const ctx = els.canvas.getContext("2d", { alpha: true, desynchronized: true });
 
 let mediaStream = null;
 let faceState = null;
@@ -836,6 +836,14 @@ function attachStreamToVideo(stream) {
   } catch {
     // ignore
   }
+
+  // Mirror the visible <video> so it matches the canvas preview (front camera).
+  try {
+    v.style.transform = currentFacingMode !== "environment" ? "scaleX(-1)" : "none";
+  } catch {
+    // ignore
+  }
+
   v.srcObject = stream;
 
   // Retry play once metadata is ready (some iOS builds require this ordering).
@@ -900,6 +908,8 @@ async function ensureMediaStream() {
 async function ensureVideoReady(videoEl, { timeoutMs = 12000 } = {}) {
   const start = performance.now();
   let lastPlayTry = 0;
+  let lastTime = videoEl.currentTime || 0;
+  let gotFrameCb = false;
 
   const tryPlay = () => {
     const now = performance.now();
@@ -909,12 +919,32 @@ async function ensureVideoReady(videoEl, { timeoutMs = 12000 } = {}) {
   };
 
   return new Promise((resolve, reject) => {
+    const tryRvfcb = () => {
+      if (gotFrameCb) return;
+      if (typeof videoEl.requestVideoFrameCallback !== "function") return;
+      try {
+        videoEl.requestVideoFrameCallback(() => {
+          gotFrameCb = true;
+        });
+      } catch {
+        // ignore
+      }
+    };
+
     const tick = () => {
-      if (videoEl.videoWidth > 0 && videoEl.videoHeight > 0) return resolve();
+      const hasDims = videoEl.videoWidth > 0 && videoEl.videoHeight > 0;
+      const timeNow = videoEl.currentTime || 0;
+      const advanced = timeNow !== lastTime && timeNow > 0;
+      lastTime = timeNow;
+
+      // Require both metadata and actual frame progress (fixes iPad Chrome black preview).
+      if (hasDims && (gotFrameCb || advanced)) return resolve();
       if (performance.now() - start > timeoutMs) return reject(new Error("摄像头初始化超时"));
+      tryRvfcb();
       tryPlay();
       requestAnimationFrame(tick);
     };
+    tryRvfcb();
     tryPlay();
     tick();
   });
@@ -1318,14 +1348,14 @@ function drawFrame() {
       console.warn("drawImage(video) failed", e);
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.filter = "none";
-      ctx.fillStyle = "#000";
-      ctx.fillRect(0, 0, cw, ch);
+      // Keep canvas transparent so the underlying <video> can still be seen.
+      ctx.clearRect(0, 0, cw, ch);
     }
     if (canFilter) ctx.filter = "none";
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   } else {
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, cw, ch);
+    // No metadata yet: keep transparent so <video> can show when it becomes ready.
+    ctx.clearRect(0, 0, cw, ch);
   }
 
   const now = performance.now();
