@@ -484,6 +484,9 @@ button{font:inherit}
   background:transparent;
   color:#c0c4c9;
 }
+.wx-tool.is-active{color:#2a2a2a}
+.wx-tool.is-active .wx-toolIcon{opacity:.9; filter:drop-shadow(0 6px 14px rgba(0,0,0,.10))}
+.wx-tool.is-active .wx-toolText{color:#2a2a2a}
 .wx-toolIcon{
   width:32px;height:32px;
   margin:0 auto 8px;

@@ -53,6 +53,10 @@ const els = {
   btnRetake: document.getElementById("btnRetake"),
   btnDownload: document.getElementById("btnDownload"),
   btnShare: document.getElementById("btnShare"),
+  btnToolCutout: document.getElementById("btnToolCutout"),
+  btnToolFast: document.getElementById("btnToolFast"),
+  btnToolEmoji: document.getElementById("btnToolEmoji"),
+  emojiFile: document.getElementById("emojiFile"),
 
   btnSubRealtime: document.getElementById("btnSubRealtime"),
   btnSubStable: document.getElementById("btnSubStable"),
@@ -68,6 +72,11 @@ let isPreviewing = false;
 let isRecording = false;
 let lastGifBlob = null;
 let lastGifUrl = null;
+let lastOriginalGifBlob = null;
+let lastOriginalGifUrl = null;
+let lastCapture = null; // { frames: ImageData[], faces: (FaceRegion|null)[], delayMs:number, w:number, h:number, caption:string }
+let isReencoding = false;
+let resultEdits = { cutout: false, fast: false, emojiImg: null }; // emojiImg: HTMLImageElement|null
 let currentFacingMode = "user"; // "user" | "environment"
 let hasMic = false;
 let hasRequestedPermissions = false;
@@ -1498,6 +1507,158 @@ function revokeLastGifUrl() {
   lastGifUrl = null;
 }
 
+function revokeOriginalGifUrl() {
+  if (lastOriginalGifUrl) URL.revokeObjectURL(lastOriginalGifUrl);
+  lastOriginalGifUrl = null;
+}
+
+function setGifBlob(blob) {
+  revokeLastGifUrl();
+  lastGifBlob = blob;
+  lastGifUrl = blob ? URL.createObjectURL(blob) : null;
+}
+
+function setOriginalGifBlob(blob) {
+  revokeOriginalGifUrl();
+  lastOriginalGifBlob = blob;
+  lastOriginalGifUrl = blob ? URL.createObjectURL(blob) : null;
+}
+
+function setToolActive(el, active) {
+  if (!el) return;
+  el.classList.toggle("is-active", !!active);
+}
+
+function resetResultEdits() {
+  resultEdits = { cutout: false, fast: false, emojiImg: null };
+  setToolActive(els.btnToolCutout, false);
+  setToolActive(els.btnToolFast, false);
+  setToolActive(els.btnToolEmoji, false);
+}
+
+function hasAnyEdits() {
+  return !!(resultEdits.cutout || resultEdits.fast || resultEdits.emojiImg);
+}
+
+async function loadEmojiFromFile(file) {
+  if (!file) return null;
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.decoding = "async";
+    img.src = url;
+    await img.decode().catch(() => new Promise((r, rej) => ((img.onload = r), (img.onerror = rej))));
+    return img;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function reencodeFromLastCapture() {
+  if (isReencoding || isRecording) return;
+  if (!lastCapture?.frames?.length) {
+    setStatus("没有可编辑的拍摄内容，请先拍摄一次", "error");
+    return;
+  }
+
+  // If no edits, restore original GIF quickly.
+  if (!hasAnyEdits() && lastOriginalGifBlob) {
+    setGifBlob(lastOriginalGifBlob);
+    if (els.gifPreview) els.gifPreview.src = lastGifUrl;
+    setStatus("已恢复原图");
+    return;
+  }
+
+  isReencoding = true;
+  setProgress("0%");
+  setStatus("处理中…");
+
+  const delayMs = Math.max(20, Math.round(lastCapture.delayMs / (resultEdits.fast ? 2 : 1)));
+  const gif = createGifEncoder();
+  gif.on("progress", (p) => setProgress(`${Math.round((p || 0) * 100)}%`));
+
+  const finishedBlob = await new Promise((resolve, reject) => {
+    gif.on("finished", resolve);
+    try {
+      const srcCanvas = document.createElement("canvas");
+      srcCanvas.width = lastCapture.w;
+      srcCanvas.height = lastCapture.h;
+      const srcCtx = srcCanvas.getContext("2d", { alpha: false });
+
+      const outCanvas = document.createElement("canvas");
+      outCanvas.width = lastCapture.w;
+      outCanvas.height = lastCapture.h;
+      const outCtx = outCanvas.getContext("2d", { alpha: false });
+
+      for (let i = 0; i < lastCapture.frames.length; i++) {
+        const frame = lastCapture.frames[i];
+        const face = lastCapture.faces?.[i] || null;
+
+        srcCtx.putImageData(frame, 0, 0);
+
+        // Base
+        if (resultEdits.cutout && face) {
+          // Blur background, keep face sharp.
+          outCtx.save();
+          outCtx.filter = "blur(10px) brightness(1.05) saturate(1.05)";
+          outCtx.drawImage(srcCanvas, 0, 0);
+          outCtx.restore();
+
+          outCtx.save();
+          clipEllipse(outCtx, face.x, face.y, face.rx, face.ry);
+          outCtx.filter = "none";
+          outCtx.drawImage(srcCanvas, 0, 0);
+          outCtx.restore();
+
+          // Soft edge
+          outCtx.save();
+          outCtx.globalAlpha = 0.55;
+          outCtx.strokeStyle = "rgba(255,255,255,0.85)";
+          outCtx.lineWidth = 2;
+          outCtx.beginPath();
+          outCtx.ellipse(face.x, face.y, face.rx, face.ry, 0, 0, Math.PI * 2);
+          outCtx.stroke();
+          outCtx.restore();
+        } else {
+          outCtx.filter = "none";
+          outCtx.drawImage(srcCanvas, 0, 0);
+        }
+
+        // Emoji overlay (fixed corner; avoid face by placing bottom-left)
+        if (resultEdits.emojiImg) {
+          const margin = 14;
+          const size = 86;
+          const x = margin;
+          const y = outCanvas.height - margin - size;
+          outCtx.save();
+          outCtx.globalAlpha = 0.96;
+          outCtx.drawImage(resultEdits.emojiImg, x, y, size, size);
+          outCtx.restore();
+        }
+
+        gif.addFrame(outCanvas, { copy: true, delay: delayMs });
+      }
+
+      gif.render();
+    } catch (e) {
+      reject(e);
+    }
+  }).catch((e) => {
+    console.warn(e);
+    setStatus("处理失败，请重试", "error");
+    return null;
+  });
+
+  if (finishedBlob) {
+    setGifBlob(finishedBlob);
+    if (els.gifPreview) els.gifPreview.src = lastGifUrl;
+    setStatus("处理完成");
+  }
+
+  setProgress("");
+  isReencoding = false;
+}
+
 function setShutterProgress(p) {
   const v = Math.max(0, Math.min(1, p || 0));
   els.btnShutter.style.setProperty("--p", String(v));
@@ -1597,6 +1758,10 @@ async function recordGif3s() {
 
   revokeLastGifUrl();
   lastGifBlob = null;
+  // Reset editing state for the new capture:
+  resetResultEdits();
+  lastCapture = null;
+  setOriginalGifBlob(null);
 
   const stableMode = subtitleMode === "stable";
   if (!stableMode) {
@@ -1621,7 +1786,8 @@ async function recordGif3s() {
     }
   }
 
-  const frames = stableMode ? [] : null;
+  const frames = [];
+  const faces = [];
   const start = performance.now();
 
   let gif = null;
@@ -1633,8 +1799,16 @@ async function recordGif3s() {
       setProgress(`${pct}%`);
     });
     gif.on("finished", (blob) => {
-      lastGifBlob = blob;
-      lastGifUrl = URL.createObjectURL(blob);
+      setGifBlob(blob);
+      setOriginalGifBlob(blob);
+      lastCapture = {
+        frames,
+        faces,
+        delayMs: FRAME_DELAY_MS,
+        w: OUTPUT_SIZE,
+        h: OUTPUT_SIZE,
+        caption: captionText || "",
+      };
       setStatus("拍摄完成");
       setProgress("");
       isRecording = false;
@@ -1668,13 +1842,11 @@ async function recordGif3s() {
     if (captured >= FRAME_COUNT) return;
     captured++;
     try {
-      if (stableMode) {
-        frames.push(ctx.getImageData(0, 0, OUTPUT_SIZE, OUTPUT_SIZE));
-        setProgress(`采样帧：${captured}/${FRAME_COUNT}`);
-      } else {
-        gif.addFrame(els.canvas, { copy: true, delay: FRAME_DELAY_MS });
-        setProgress(`采样帧：${captured}/${FRAME_COUNT}`);
-      }
+      // Always sample frames for post-edit tools.
+      frames.push(ctx.getImageData(0, 0, OUTPUT_SIZE, OUTPUT_SIZE));
+      faces.push(getFaceRegion());
+      if (!stableMode) gif.addFrame(els.canvas, { copy: true, delay: FRAME_DELAY_MS });
+      setProgress(`采样帧：${captured}/${FRAME_COUNT}`);
     } catch {
       // ignore
     }
@@ -1702,9 +1874,19 @@ async function recordGif3s() {
       const pct = Math.round((p || 0) * 100);
       setProgress(`${pct}%`);
     });
+    const finalFrames = [];
+
     gif.on("finished", (blob) => {
-      lastGifBlob = blob;
-      lastGifUrl = URL.createObjectURL(blob);
+      setGifBlob(blob);
+      setOriginalGifBlob(blob);
+      lastCapture = {
+        frames: finalFrames.length ? finalFrames : frames,
+        faces,
+        delayMs: FRAME_DELAY_MS,
+        w: OUTPUT_SIZE,
+        h: OUTPUT_SIZE,
+        caption: captionText || "",
+      };
       setStatus("拍摄完成");
       setProgress("");
       isRecording = false;
@@ -1722,6 +1904,11 @@ async function recordGif3s() {
     for (const img of frames) {
       encodeCtx.putImageData(img, 0, 0);
       drawSubtitle(encodeCtx, captionText);
+      try {
+        finalFrames.push(encodeCtx.getImageData(0, 0, OUTPUT_SIZE, OUTPUT_SIZE));
+      } catch {
+        // ignore
+      }
       gif.addFrame(encodeCanvas, { copy: true, delay: FRAME_DELAY_MS });
     }
     gif.render();
@@ -1858,6 +2045,10 @@ function showResult() {
   els.gifPreview.classList.add("is-on");
   els.sheet.hidden = true;
   els.resultPanel.hidden = false;
+  // Reflect current edit toggles (if any).
+  setToolActive(els.btnToolCutout, !!resultEdits.cutout);
+  setToolActive(els.btnToolFast, !!resultEdits.fast);
+  setToolActive(els.btnToolEmoji, !!resultEdits.emojiImg);
 }
 
 function hideResult() {
@@ -1867,6 +2058,10 @@ function hideResult() {
   els.resultPanel.hidden = true;
   setShutterProgress(0);
   setTapToStartVisible(!isPreviewing && streamIsLive(mediaStream));
+  // Hide edit state highlight when leaving result view.
+  setToolActive(els.btnToolCutout, false);
+  setToolActive(els.btnToolFast, false);
+  setToolActive(els.btnToolEmoji, false);
 }
 
 function resetToDefaultView() {
@@ -2230,6 +2425,48 @@ els.btnDownload.addEventListener("click", () => {
 
 els.btnShare.addEventListener("click", () => {
   shareGif();
+});
+
+els.btnToolCutout?.addEventListener("click", async () => {
+  if (!lastGifBlob) return;
+  resultEdits.cutout = !resultEdits.cutout;
+  setToolActive(els.btnToolCutout, resultEdits.cutout);
+  await reencodeFromLastCapture();
+});
+
+els.btnToolFast?.addEventListener("click", async () => {
+  if (!lastGifBlob) return;
+  resultEdits.fast = !resultEdits.fast;
+  setToolActive(els.btnToolFast, resultEdits.fast);
+  await reencodeFromLastCapture();
+});
+
+els.btnToolEmoji?.addEventListener("click", async () => {
+  if (!lastGifBlob) return;
+  if (resultEdits.emojiImg) {
+    resultEdits.emojiImg = null;
+    setToolActive(els.btnToolEmoji, false);
+    await reencodeFromLastCapture();
+    return;
+  }
+  if (!els.emojiFile) return;
+  els.emojiFile.value = "";
+  els.emojiFile.click();
+});
+
+els.emojiFile?.addEventListener("change", async () => {
+  const f = els.emojiFile.files && els.emojiFile.files[0];
+  if (!f) return;
+  try {
+    const img = await loadEmojiFromFile(f);
+    if (!img) return;
+    resultEdits.emojiImg = img;
+    setToolActive(els.btnToolEmoji, true);
+    await reencodeFromLastCapture();
+  } catch (e) {
+    console.warn(e);
+    setStatus("贴表情失败：无法读取图片", "error");
+  }
 });
 
 els.btnSubRealtime.addEventListener("click", () => setSubtitleMode("realtime"));

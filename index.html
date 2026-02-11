@@ -61,15 +61,15 @@
 
       <section id="resultPanel" class="wx-result" hidden aria-label="拍摄结果">
         <div class="wx-resultTools">
-          <button class="wx-tool" type="button" disabled aria-label="去背景">
+          <button id="btnToolCutout" class="wx-tool" type="button" aria-label="去背景">
             <span class="wx-toolIcon wx-toolIcon--cutout" aria-hidden="true"></span>
             <span class="wx-toolText">去背景</span>
           </button>
-          <button class="wx-tool" type="button" disabled aria-label="快速播放">
+          <button id="btnToolFast" class="wx-tool" type="button" aria-label="快速播放">
             <span class="wx-toolIcon wx-toolIcon--fast" aria-hidden="true"></span>
             <span class="wx-toolText">快速播放</span>
           </button>
-          <button class="wx-tool" type="button" disabled aria-label="贴表情">
+          <button id="btnToolEmoji" class="wx-tool" type="button" aria-label="贴表情">
             <span class="wx-toolIcon wx-toolIcon--sticker" aria-hidden="true"></span>
             <span class="wx-toolText">贴表情</span>
           </button>
@@ -95,6 +95,7 @@
     <!-- Hidden elements -->
     <video id="inputVideo" playsinline muted autoplay></video>
     <canvas id="jeelizCanvas" width="256" height="256"></canvas>
+    <input id="emojiFile" type="file" accept="image/*" hidden />
 
     <script src="./assets/libs/gif.js"></script>
     <script type="module" src="./app.js"></script>
