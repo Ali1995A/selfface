@@ -220,6 +220,49 @@ const effects = [
     filter: "rainbowFrame",
     icon: { emoji: "🌈", bg: "linear-gradient(135deg,#ffb0d9,#b6f3ff)" },
   },
+  {
+    id: "starRain",
+    name: "星星雨",
+    from: "selfface",
+    sticker: null,
+    icon: { emoji: "⭐️", bg: "linear-gradient(135deg,#fff0a6,#b7f0ff)" },
+  },
+  {
+    id: "confetti",
+    name: "彩纸雨",
+    from: "selfface",
+    sticker: null,
+    icon: { emoji: "🎉", bg: "linear-gradient(135deg,#b7f0ff,#ffd1e6)" },
+  },
+  {
+    id: "bunnyEars",
+    name: "兔兔耳朵",
+    from: "selfface",
+    sticker: null,
+    icon: { emoji: "🐰", bg: "linear-gradient(135deg,#ffd1e6,#d1f0ff)" },
+  },
+  {
+    id: "blush",
+    name: "害羞腮红",
+    from: "selfface",
+    sticker: null,
+    icon: { emoji: "😊", bg: "linear-gradient(135deg,#ffd1e6,#ffeaa6)" },
+  },
+  {
+    id: "sparkleHalo",
+    name: "闪闪光环",
+    from: "selfface",
+    sticker: null,
+    icon: { emoji: "👼", bg: "linear-gradient(135deg,#d7e2ff,#fff0a6)" },
+  },
+  {
+    id: "candyFrame",
+    name: "糖果边框",
+    from: "selfface",
+    sticker: null,
+    filter: "candyFrame",
+    icon: { emoji: "🍬", bg: "linear-gradient(135deg,#b7f0ff,#ffb7d9)" },
+  },
   { id: "more", name: "更多特效", from: "", sticker: null, thumb: "more" },
 ];
 let selectedEffectId = "thanksBoss";
@@ -280,6 +323,164 @@ function drawWeChatText(context, text, { x, y, fontSize = 54, fill = "#ffffff", 
 function drawEffectOverlay(context, nowMs) {
   const t = (nowMs - effectState.startedAt) / 1000;
   const id = effectState.id;
+
+  if (id === "starRain") {
+    // Bright stars falling from top; fade near face.
+    const drawStar = (cx, cy, outerR, innerR, rot) => {
+      const spikes = 5;
+      let angle = -Math.PI / 2 + rot;
+      const step = Math.PI / spikes;
+      context.beginPath();
+      for (let i = 0; i < spikes; i++) {
+        context.lineTo(cx + Math.cos(angle) * outerR, cy + Math.sin(angle) * outerR);
+        angle += step;
+        context.lineTo(cx + Math.cos(angle) * innerR, cy + Math.sin(angle) * innerR);
+        angle += step;
+      }
+      context.closePath();
+    };
+
+    context.save();
+    for (const p of effectState.particles) {
+      const y = ((p.y + t * p.v) % (OUTPUT_SIZE + 130)) - 60;
+      const x = p.x + Math.sin(t * 1.1 + p.p) * 10;
+      const a = particleAlphaOutsideFace(x, y, 0.5);
+      context.globalAlpha = a;
+      context.fillStyle = p.c;
+      const r = p.s * (7.5 + 3.5 * (0.5 + 0.5 * Math.sin(t * 2 + p.p)));
+      drawStar(x, y, r, r * 0.48, t * 0.6 + p.r);
+      context.fill();
+    }
+    context.restore();
+    return;
+  }
+
+  if (id === "confetti") {
+    // Confetti pieces drifting down; keep away from face via fade.
+    context.save();
+    for (const p of effectState.particles) {
+      const y = ((p.y + t * p.v) % (OUTPUT_SIZE + 150)) - 70;
+      const x = p.x + Math.sin(t * 1.4 + p.p) * 14;
+      const a = particleAlphaOutsideFace(x, y, 0.33);
+      context.globalAlpha = a;
+      context.save();
+      context.translate(x, y);
+      context.rotate(p.r + t * 1.2);
+      context.fillStyle = p.c;
+      context.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      context.restore();
+    }
+    context.restore();
+    return;
+  }
+
+  if (id === "bunnyEars") {
+    // Cute bunny ears above head (face-tracked).
+    if (!faceState || !faceState.detected || faceState.detected < 0.6) return;
+    const { x, y, s, rz } = faceToCanvasTransform(faceState);
+    const earH = clamp(s * 1.05, 140, 220);
+    const earW = earH * 0.32;
+    const gap = earW * 0.55;
+    const baseY = y - earH * 0.62;
+
+    const drawEar = (dx, tilt) => {
+      context.save();
+      context.translate(x + dx, baseY);
+      context.rotate(rz + tilt);
+      context.globalAlpha = 0.95;
+
+      // outer
+      context.fillStyle = "rgba(255,255,255,0.97)";
+      context.strokeStyle = "rgba(255,180,210,0.55)";
+      context.lineWidth = 4;
+      roundRectPath(context, -earW / 2, -earH / 2, earW, earH, earW * 0.6);
+      context.fill();
+      context.stroke();
+
+      // inner
+      context.globalAlpha = 0.85;
+      context.fillStyle = "rgba(255,170,210,0.75)";
+      roundRectPath(context, -earW * 0.25, -earH * 0.33, earW * 0.5, earH * 0.72, earW * 0.5);
+      context.fill();
+
+      context.restore();
+    };
+
+    context.save();
+    drawEar(-(gap + earW * 0.15), -0.12);
+    drawEar(gap + earW * 0.15, 0.08);
+    context.restore();
+    return;
+  }
+
+  if (id === "blush") {
+    // Soft blush on cheeks (face-tracked).
+    if (!faceState || !faceState.detected || faceState.detected < 0.6) return;
+    const { x, y, s, rz } = faceToCanvasTransform(faceState);
+    const r = clamp(s * 0.22, 22, 44);
+    const dx = clamp(s * 0.28, 28, 60);
+    const yy = y + clamp(s * 0.08, 10, 22);
+    const pulse = 0.86 + 0.12 * Math.sin(t * 2.2);
+
+    const drawCheek = (sx) => {
+      const cx = x + sx;
+      context.save();
+      context.translate(cx, yy);
+      context.rotate(rz);
+      const g = context.createRadialGradient(0, 0, 0, 0, 0, r);
+      g.addColorStop(0, `rgba(255,120,170,${0.32 * pulse})`);
+      g.addColorStop(1, "rgba(255,120,170,0)");
+      context.fillStyle = g;
+      context.beginPath();
+      context.ellipse(0, 0, r * 1.05, r * 0.8, 0, 0, Math.PI * 2);
+      context.fill();
+      context.restore();
+    };
+
+    context.save();
+    drawCheek(-dx);
+    drawCheek(dx);
+    context.restore();
+    return;
+  }
+
+  if (id === "sparkleHalo") {
+    // Small halo + sparkles above head (face-tracked).
+    if (!faceState || !faceState.detected || faceState.detected < 0.6) return;
+    const { x, y, s, rz } = faceToCanvasTransform(faceState);
+    const cx = x;
+    const cy = y - clamp(s * 0.62, 70, 150);
+    const R = clamp(s * 0.34, 48, 96);
+
+    context.save();
+    context.translate(cx, cy);
+    context.rotate(rz * 0.4);
+
+    // halo ring
+    context.globalAlpha = 0.92;
+    context.strokeStyle = "rgba(255, 230, 120, 0.95)";
+    context.lineWidth = clamp(s * 0.06, 5, 10);
+    context.beginPath();
+    context.ellipse(0, 0, R, R * 0.62, 0, 0, Math.PI * 2);
+    context.stroke();
+
+    // sparkles
+    const n = 10;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + t * 0.9;
+      const px = Math.cos(a) * (R + 10);
+      const py = Math.sin(a) * (R * 0.62 + 8);
+      const alpha = 0.15 + 0.25 * (0.5 + 0.5 * Math.sin(t * 2.2 + i));
+      context.globalAlpha = alpha;
+      context.fillStyle = "rgba(255,255,255,0.9)";
+      context.beginPath();
+      context.ellipse(px, py, 2.2, 2.2, 0, 0, Math.PI * 2);
+      context.fill();
+    }
+
+    context.restore();
+    return;
+  }
 
   if (id === "heartBurst") {
     // Floating hearts mostly around edges / above head. Very low face occlusion.
@@ -806,6 +1007,39 @@ function drawFrameOverlay(context) {
     context.globalAlpha = 0.95;
     roundRectPath(context, w / 2 + 2, w / 2 + 2, OUTPUT_SIZE - w - 4, OUTPUT_SIZE - w - 4, 34);
     context.stroke();
+    context.restore();
+  }
+
+  if (currentEffect?.filter === "candyFrame") {
+    context.save();
+    const w = 18;
+    const grad = context.createLinearGradient(0, 0, OUTPUT_SIZE, 0);
+    grad.addColorStop(0, "#ff86c8");
+    grad.addColorStop(0.25, "#ffd36a");
+    grad.addColorStop(0.5, "#7cf0ff");
+    grad.addColorStop(0.75, "#b98cff");
+    grad.addColorStop(1, "#4cffb7");
+    context.lineWidth = w;
+    context.strokeStyle = grad;
+    context.globalAlpha = 0.95;
+    roundRectPath(context, w / 2 + 2, w / 2 + 2, OUTPUT_SIZE - w - 4, OUTPUT_SIZE - w - 4, 34);
+    context.stroke();
+
+    // subtle diagonal stripes
+    context.globalAlpha = 0.12;
+    context.save();
+    context.beginPath();
+    roundRectPath(context, w + 2, w + 2, OUTPUT_SIZE - (w + 2) * 2, OUTPUT_SIZE - (w + 2) * 2, 26);
+    context.clip();
+    context.translate(OUTPUT_SIZE / 2, OUTPUT_SIZE / 2);
+    context.rotate(-0.5);
+    context.translate(-OUTPUT_SIZE / 2, -OUTPUT_SIZE / 2);
+    context.fillStyle = "rgba(255,255,255,0.95)";
+    for (let x = -OUTPUT_SIZE; x < OUTPUT_SIZE * 2; x += 22) {
+      context.fillRect(x, 0, 10, OUTPUT_SIZE * 2);
+    }
+    context.restore();
+
     context.restore();
   }
 
@@ -1632,6 +1866,33 @@ function setEffect(effectId) {
         v: 38 + rnd() * 62,
         r: 10 + rnd() * 18,
         w: 0.6 + rnd() * 1.2,
+        p: rnd() * Math.PI * 2,
+        c: palette[Math.floor(rnd() * palette.length)],
+      });
+    }
+  } else if (eff.id === "starRain") {
+    const palette = ["#ffe27a", "#ffffff", "#ffd1e6", "#b7f0ff", "#d7e2ff"];
+    for (let i = 0; i < 18; i++) {
+      effectState.particles.push({
+        x: rnd() * OUTPUT_SIZE,
+        y: rnd() * (OUTPUT_SIZE + 130),
+        v: 90 + rnd() * 150,
+        r: (rnd() - 0.5) * 0.8,
+        s: 0.75 + rnd() * 0.65,
+        p: rnd() * Math.PI * 2,
+        c: palette[Math.floor(rnd() * palette.length)],
+      });
+    }
+  } else if (eff.id === "confetti") {
+    const palette = ["#ff5aa5", "#ffcc4a", "#6be8ff", "#7c5cff", "#4cffb7", "#ffffff"];
+    for (let i = 0; i < 22; i++) {
+      effectState.particles.push({
+        x: rnd() * OUTPUT_SIZE,
+        y: rnd() * (OUTPUT_SIZE + 150),
+        v: 95 + rnd() * 180,
+        r: (rnd() - 0.5) * 1.2,
+        w: 6 + rnd() * 10,
+        h: 4 + rnd() * 10,
         p: rnd() * Math.PI * 2,
         c: palette[Math.floor(rnd() * palette.length)],
       });
