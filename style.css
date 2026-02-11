@@ -22,7 +22,8 @@ body{
 button{font:inherit}
 
 .wx{
-  min-height:100%;
+  min-height:100vh;
+  min-height:100svh;
   display:flex;
   flex-direction:column;
   padding-bottom:env(safe-area-inset-bottom);
@@ -77,8 +78,9 @@ button{font:inherit}
 }
 
 .wx-card{
-  width:min(78vw,430px);
-  aspect-ratio:1/1;
+  --card: min(86vw, 430px, 54svh);
+  width:var(--card);
+  height:var(--card);
   border-radius:var(--radiusCard);
   overflow:hidden;
   background:#000;
@@ -481,4 +483,73 @@ button{font:inherit}
   top:-9999px;
   width:1px;height:1px;
   opacity:0;
+}
+
+/* iPhone portrait: tighter spacing, bigger usable preview */
+@media (max-width: 430px){
+  .wx-top{ padding-bottom:6px; }
+  .wx-notch{ transform: scale(.92); }
+  .wx-source{ font-size:16px; }
+  .wx-stage{ padding:12px 14px 6px; }
+  .wx-card{ --card: min(92vw, 420px, 52svh); border-radius:24px; }
+  .wx-sheetCollapsed{ padding:12px 12px 0; }
+  .wx-effectItem{ width:86px; }
+  .wx-thumb{ width:78px; height:78px; border-radius:14px; border-width:3px; }
+  .wx-label{ font-size:16px; }
+  .wx-shutterDock{ height:138px; }
+  .wx-shutter{ width:94px; height:94px; }
+  .wx-chevron{ left:18px; bottom:56px; }
+  .wx-hud{ bottom:138px; }
+  .wx-resultActions{ padding:22px 10px 22px; }
+  .wx-action{ width:104px; }
+  .wx-actionIcon{ width:84px; height:84px; }
+}
+
+/* iPad Pro (1st gen) landscape: two-column layout (preview left, effects right) */
+@media (orientation: landscape) and (min-width: 900px){
+  .wx{
+    display:grid;
+    grid-template-columns: 1fr 420px;
+    grid-template-rows: auto 1fr;
+    gap: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .wx-top{
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+  .wx-stage{
+    grid-column: 1;
+    grid-row: 2;
+    padding: 10px 12px 10px 18px;
+    align-items:center;
+  }
+  .wx-card{
+    --card: min(64vh, 540px);
+    border-radius: 26px;
+  }
+  .wx-sheet{
+    grid-column: 2;
+    grid-row: 2;
+    margin-top: 0;
+  }
+  .wx-sheetHandle{
+    display:none;
+  }
+  .wx-sheetCollapsed{
+    padding: 18px 14px 0;
+  }
+  .wx-strip{
+    padding-bottom: 16px;
+  }
+  .wx-shutterDock{
+    height: 160px;
+  }
+  .wx-hud{
+    bottom: 160px;
+  }
+  .wx-sheetExpanded{
+    margin: 10px 12px 0;
+    padding-bottom: 120px;
+  }
 }
