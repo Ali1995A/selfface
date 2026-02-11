@@ -143,7 +143,7 @@ const effects = [
     name: "猫猫",
     from: "FaceUp",
     sticker: "./assets/templates/faceup/cat.png",
-    placement: { scale: 2.18, offsetX: 0, offsetY: -0.11, clamp: [140, 320] },
+    placement: { scale: 2.22, offsetX: 0, offsetY: -0.26, clamp: [140, 320] },
     icon: { emoji: "🐱", bg: "linear-gradient(135deg,#ffd1e6,#c6fff3)" },
   },
   {
@@ -151,7 +151,7 @@ const effects = [
     name: "狗狗",
     from: "FaceUp",
     sticker: "./assets/templates/faceup/dog.png",
-    placement: { scale: 2.18, offsetX: 0, offsetY: -0.11, clamp: [140, 320] },
+    placement: { scale: 2.22, offsetX: 0, offsetY: -0.26, clamp: [140, 320] },
     icon: { emoji: "🐶", bg: "linear-gradient(135deg,#c6e8ff,#ffe5b6)" },
   },
   {
@@ -1016,8 +1016,11 @@ function rawFaceToCanvasTransform(state) {
   const x = clamp(lerp(x0, x1, k), -OUTPUT_SIZE * 0.25, OUTPUT_SIZE * 1.25);
   const y = clamp(lerp(y0, y1, k), -OUTPUT_SIZE * 0.25, OUTPUT_SIZE * 1.25);
 
-  // Keep scale conservative (oversize stickers look "off" on iPad); rely on per-effect placement clamp.
-  const s = state.s * OUTPUT_SIZE;
+  // Scale: blend between "already square" and "full video width" interpretations.
+  // This improves sticker sizing/offset on iPad landscape streams (16:9 or 4:3).
+  const s0 = state.s * OUTPUT_SIZE;
+  const s1 = state.s * OUTPUT_SIZE * (vw / side);
+  const s = lerp(s0, s1, k);
   const rz = state.rz || 0;
   return { x, y, s, rz };
 }
