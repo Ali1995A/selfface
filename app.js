@@ -1732,6 +1732,28 @@ function gifFile() {
   return new File([lastGifBlob], name, { type: "image/gif" });
 }
 
+function isWeChatWebView() {
+  const ua = String(navigator.userAgent || "");
+  return /MicroMessenger/i.test(ua);
+}
+
+async function sharePageLink() {
+  if (!navigator.share) return false;
+  try {
+    await navigator.share({
+      title: "selfface",
+      text: "selfface",
+      url: location.href,
+    });
+    setStatus("已打开系统分享面板（分享链接）");
+    return true;
+  } catch (e) {
+    if (String(e?.name || "").toLowerCase().includes("abort")) return true;
+    console.warn(e);
+    return false;
+  }
+}
+
 async function shareGif() {
   if (!lastGifBlob) {
     setStatus("还没有可分享的 GIF，请先拍摄一次", "error");
@@ -1756,11 +1778,26 @@ async function shareGif() {
     console.warn(e);
   }
 
+  // Many iOS setups (and especially WeChat) don't accept sharing a GIF file directly to chats.
+  // Fall back to sharing the page link, which is the most compatible “share to WeChat friend” option.
+  if (await sharePageLink()) return;
+
   // Fallbacks:
-  // iOS without Web Share files: open in a new tab so user can long-press to save/share.
+  // Open the GIF so user can long-press to save, then send from Photos in WeChat.
   if (lastGifUrl) {
-    window.open(lastGifUrl, "_blank", "noopener,noreferrer");
-    setStatus("已打开 GIF：可长按保存/分享", "error");
+    try {
+      const w = window.open(lastGifUrl, "_blank", "noopener,noreferrer");
+      if (!w) throw new Error("popup blocked");
+      setStatus("已打开 GIF：可长按保存到相册，再在微信发送", "error");
+    } catch {
+      // Some WebViews block popups; keep the GIF visible and instruct user.
+      setStatus(
+        isWeChatWebView()
+          ? "微信内置浏览器可能不支持直接转发 GIF：请点“下载”保存到相册，再在微信发送"
+          : "当前环境不支持直接分享：请点“下载”保存到相册后再分享",
+        "error",
+      );
+    }
   } else {
     downloadGif();
     setStatus("已下载 GIF：可在“文件”中打开再分享/存相册", "error");

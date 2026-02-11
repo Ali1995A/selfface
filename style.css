@@ -112,6 +112,10 @@ button{font:inherit}
   height:100%;
   object-fit:cover;
   display:none;
+  /* Allow long-press save/share on iOS/WeChat for the generated GIF preview */
+  -webkit-touch-callout: default;
+  -webkit-user-select: auto;
+  user-select: auto;
 }
 .wx-gif.is-on{display:block}
 
