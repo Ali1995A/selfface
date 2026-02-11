@@ -49,6 +49,8 @@ let lastGifBlob = null;
 let lastGifUrl = null;
 let currentFacingMode = "user"; // "user" | "environment"
 let hasMic = false;
+let hasRequestedPermissions = false;
+let lastStreamFacingMode = null;
 
 let stickerImg = null;
 let stickerReady = false;
@@ -317,6 +319,35 @@ async function requestMedia(facingMode) {
   return stream;
 }
 
+function streamIsLive(stream) {
+  if (!stream) return false;
+  const tracks = stream.getTracks();
+  return tracks.length > 0 && tracks.some((t) => t.readyState === "live");
+}
+
+async function ensureMediaStream() {
+  // Reuse existing stream to avoid repeated permission prompts.
+  const needNew = !streamIsLive(mediaStream) || lastStreamFacingMode !== currentFacingMode;
+
+  if (!needNew) return mediaStream;
+
+  stopTracks(mediaStream);
+  stopTracks(micStream);
+  mediaStream = null;
+  micStream = null;
+  hasMic = false;
+
+  const stream = await requestMedia(currentFacingMode);
+  mediaStream = stream;
+  lastStreamFacingMode = currentFacingMode;
+  hasRequestedPermissions = true;
+
+  const audioTracks = stream.getAudioTracks();
+  hasMic = audioTracks.length > 0;
+  micStream = hasMic ? new MediaStream(audioTracks) : null;
+  return stream;
+}
+
 function attachStreamToVideo(stream) {
   els.video.srcObject = stream;
   els.video.muted = true;
@@ -516,6 +547,7 @@ function stopPreview() {
   mediaStream = null;
   micStream = null;
   hasMic = false;
+  lastStreamFacingMode = null;
   faceState = null;
   stopWebSpeech();
 }
@@ -758,7 +790,7 @@ async function startPreview() {
   hideResult();
   if (isPreviewing) stopPreview();
   setProgress("");
-  setStatus("点击快门开始：将请求摄像头/麦克风权限");
+  setStatus("初始化中：请求摄像头/麦克风权限…");
 
   try {
     await preloadStickers();
@@ -767,29 +799,21 @@ async function startPreview() {
   }
 
   try {
-    setStatus("请求摄像头/麦克风权限中…");
-    mediaStream = await requestMedia(currentFacingMode);
+    mediaStream = await ensureMediaStream();
   } catch (err) {
     setStatus(`权限被拒绝或设备不可用：${err?.message || err}`, "error");
     return;
   }
 
-  // Split mic-only stream for record/transcribe.
-  {
-    const audioTracks = mediaStream.getAudioTracks();
-    hasMic = audioTracks.length > 0;
-    micStream = hasMic ? new MediaStream(audioTracks) : null;
-    if (!hasMic) {
-      setProgress("提示：未获得麦克风权限，字幕/转写可能不可用");
-    }
-  }
+  if (!hasMic) setProgress("提示：未获得麦克风权限，字幕/转写可能不可用");
 
   try {
     await attachStreamToVideo(mediaStream);
     await waitForVideoReady(els.video);
   } catch (err) {
-    setStatus(`摄像头启动失败：${err?.message || err}`, "error");
-    stopPreview();
+    // Common on iOS: permission granted but playback needs user gesture.
+    setStatus("已获取权限：点击快门开始预览", "error");
+    isPreviewing = false;
     return;
   }
 
@@ -1311,13 +1335,20 @@ function bindShutterHold() {
   window.addEventListener("mouseup", onUp);
 }
 
+async function autoRequestPermissionsOnLoad() {
+  if (hasRequestedPermissions) return;
+  try {
+    // Only request permissions; preview rendering may still require a user gesture on iOS.
+    await ensureMediaStream();
+    setStatus("已请求权限：点击快门开始预览");
+  } catch (err) {
+    setStatus(`无法获取权限：${err?.message || err}`, "error");
+  }
+}
+
 els.btnSwitchCam.addEventListener("click", async () => {
   currentFacingMode = currentFacingMode === "user" ? "environment" : "user";
-  if (isPreviewing) {
-    await startPreview();
-  } else {
-    setStatus("切换摄像头后，点击快门开始预览");
-  }
+  await startPreview();
 });
 
 els.btnRetake.addEventListener("click", () => {
@@ -1345,6 +1376,7 @@ setSubtitleMode("realtime");
 setSheetExpanded(false);
 setEffect(selectedEffectId);
 bindShutterHold();
+autoRequestPermissionsOnLoad();
 
 // iOS Safari may restore DOM state via BFCache; ensure we don't show mixed panels.
 window.addEventListener("pageshow", (e) => {
