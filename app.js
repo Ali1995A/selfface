@@ -1737,7 +1737,111 @@ function isWeChatWebView() {
   return /MicroMessenger/i.test(ua);
 }
 
+function copyToClipboardFallback(text) {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = String(text || "");
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    ta.style.top = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand && document.execCommand("copy");
+    ta.remove();
+    return !!ok;
+  } catch {
+    return false;
+  }
+}
+
+async function copyToClipboard(text) {
+  const s = String(text || "");
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(s);
+      return true;
+    }
+  } catch {
+    // ignore
+  }
+  return copyToClipboardFallback(s);
+}
+
+function waitWeixinBridgeReady(timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    const w = window;
+    if (w.WeixinJSBridge) return resolve(w.WeixinJSBridge);
+    let done = false;
+    const finish = (b) => {
+      if (done) return;
+      done = true;
+      resolve(b || null);
+    };
+    const to = setTimeout(() => finish(null), timeoutMs);
+    document.addEventListener(
+      "WeixinJSBridgeReady",
+      () => {
+        clearTimeout(to);
+        finish(w.WeixinJSBridge || null);
+      },
+      { once: true },
+    );
+  });
+}
+
+async function weChatShareLinkToFriend(url) {
+  const link = String(url || location.href);
+  const bridge = await waitWeixinBridgeReady(1500);
+  if (!bridge || typeof bridge.invoke !== "function") return false;
+
+  return new Promise((resolve) => {
+    try {
+      bridge.invoke(
+        "sendAppMessage",
+        {
+          title: "selfface",
+          desc: "点击打开并保存 GIF",
+          link,
+          img_url: "",
+          img_width: "120",
+          img_height: "120",
+        },
+        (res) => {
+          const msg = String(res?.err_msg || res?.errMsg || "").toLowerCase();
+          // ok / cancel / fail
+          if (msg.includes("ok")) resolve(true);
+          else if (msg.includes("cancel")) resolve(true);
+          else resolve(false);
+        },
+      );
+    } catch (e) {
+      console.warn(e);
+      resolve(false);
+    }
+  });
+}
+
 async function sharePageLink() {
+  // In WeChat iOS WebView, Web Share API is often unreliable; prefer WeixinJSBridge.
+  if (isWeChatWebView()) {
+    const ok = await weChatShareLinkToFriend(location.href);
+    if (ok) {
+      setStatus("已打开微信“转发给朋友”（分享链接）");
+      return true;
+    }
+
+    const copied = await copyToClipboard(location.href);
+    setStatus(
+      copied
+        ? "已复制链接：请打开微信聊天窗口粘贴发送，或点右上角“⋯”分享"
+        : "请点右上角“⋯”使用微信分享（本环境不支持直接转发 GIF 文件）",
+      "error",
+    );
+    return copied;
+  }
+
   if (!navigator.share) return false;
   try {
     await navigator.share({
@@ -1759,6 +1863,16 @@ async function shareGif() {
     setStatus("还没有可分享的 GIF，请先拍摄一次", "error");
     return;
   }
+
+  // WeChat: don't try to share the GIF file (often no-op / broken). Share link + guide save-to-album workflow.
+  if (isWeChatWebView()) {
+    const ok = await sharePageLink();
+    if (!ok) {
+      setStatus("微信内置浏览器不支持直接转发 GIF：请点“下载”保存到相册，再在微信发送", "error");
+    }
+    return;
+  }
+
   const file = gifFile();
   if (!file) return;
 
@@ -1810,6 +1924,19 @@ async function saveToPhotos() {
     setStatus("还没有可下载的 GIF，请先拍摄一次", "error");
     return;
   }
+
+  if (isWeChatWebView()) {
+    // WeChat WebView is inconsistent with downloads; the most reliable path is long-press on preview.
+    setStatus("微信内：请长按 GIF 预览保存到相册（或用系统浏览器打开再下载）", "error");
+    try {
+      // Still try a normal download as a secondary path.
+      downloadGif();
+    } catch {
+      // ignore
+    }
+    return;
+  }
+
   const file = gifFile();
   if (!file) return;
 
