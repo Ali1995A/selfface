@@ -26,6 +26,12 @@ button{font:inherit}
   display:flex;
   flex-direction:column;
   padding-bottom:env(safe-area-inset-bottom);
+  -webkit-touch-callout:none;
+  -webkit-user-select:none;
+  user-select:none;
+}
+*{
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* Top */
@@ -333,12 +339,14 @@ button{font:inherit}
 }
 
 .wx-shutter{
+  --p: 0;
   width:104px;height:104px;
   border-radius:999px;
   border:0;
   background:transparent;
   pointer-events:auto;
   position:relative;
+  touch-action: none;
 }
 .wx-shutter::before{
   content:"";
@@ -353,12 +361,12 @@ button{font:inherit}
   position:absolute;
   inset:0;
   border-radius:999px;
-  border:12px solid #8c8f93;
-  opacity:.95;
+  background: conic-gradient(var(--green) calc(var(--p) * 1turn), #8c8f93 0);
+  -webkit-mask: radial-gradient(circle, transparent 58%, #000 60%);
+  opacity:.98;
 }
 .wx-shutter.is-busy::after{
-  border-color:#c0c4c9;
-  opacity:.65;
+  opacity:1;
 }
 
 /* HUD text near bottom */

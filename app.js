@@ -62,12 +62,180 @@ let subtitleMode = "realtime"; // "realtime" | "stable"
 
 const effects = [
   { id: "none", name: "无特效", from: "WeChat Effect", sticker: null, thumb: "none" },
-  { id: "glasses", name: "谢谢老板", from: "WeChat Effect", sticker: "./assets/stickers/glasses.png" },
-  { id: "mustache", name: "新年好", from: "MurphyM", sticker: "./assets/stickers/mustache.png" },
-  { id: "crown", name: "恭喜发财", from: "MurphyM", sticker: "./assets/stickers/crown.png" },
+  { id: "thanksBoss", name: "谢谢老板", from: "WeChat Effect", sticker: "./assets/stickers/glasses.png" },
+  { id: "newYear", name: "新年好", from: "MurphyM", sticker: "./assets/stickers/mustache.png" },
+  { id: "gongXiFaCai", name: "恭喜发财", from: "MurphyM", sticker: "./assets/stickers/crown.png" },
   { id: "more", name: "更多特效", from: "", sticker: null, thumb: "more" },
 ];
-let selectedEffectId = "glasses";
+let selectedEffectId = "thanksBoss";
+let shutterProgressRaf = 0;
+let shutterProgressStart = 0;
+let shutterProgressDuration = DURATION_S * 1000;
+let effectState = { id: "none", startedAt: performance.now(), seed: 1, particles: [] };
+
+function hashSeed(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function seededRandom(seed) {
+  // Mulberry32
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function roundRectPath(context, x, y, w, h, r) {
+  const radius = Math.min(r, w / 2, h / 2);
+  context.beginPath();
+  context.moveTo(x + radius, y);
+  context.arcTo(x + w, y, x + w, y + h, radius);
+  context.arcTo(x + w, y + h, x, y + h, radius);
+  context.arcTo(x, y + h, x, y, radius);
+  context.arcTo(x, y, x + w, y, radius);
+  context.closePath();
+}
+
+function drawWeChatText(context, text, { x, y, fontSize = 54, fill = "#ffffff", stroke = "#000000", strokeW = 10 }) {
+  context.save();
+  context.font = `900 ${fontSize}px -apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans SC",sans-serif`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.lineJoin = "round";
+  context.miterLimit = 2;
+  if (strokeW > 0) {
+    context.lineWidth = strokeW;
+    context.strokeStyle = stroke;
+    context.strokeText(text, x, y);
+  }
+  context.fillStyle = fill;
+  context.fillText(text, x, y);
+  context.restore();
+}
+
+function drawEffectOverlay(context, nowMs) {
+  const t = (nowMs - effectState.startedAt) / 1000;
+  const id = effectState.id;
+
+  if (id === "thanksBoss") {
+    // Money background: subtle drifting banknotes behind.
+    context.save();
+    for (const b of effectState.particles) {
+      const dx = Math.sin(t * b.w + b.p) * 6;
+      const dy = Math.cos(t * b.w + b.p) * 6;
+      const x = b.x + dx;
+      const y = b.y + dy;
+      context.save();
+      context.translate(x, y);
+      context.rotate(b.r);
+      context.scale(b.s, b.s);
+      context.globalAlpha = 0.9;
+      // bill
+      context.fillStyle = "rgba(120, 200, 140, 0.65)";
+      context.strokeStyle = "rgba(40, 120, 70, 0.55)";
+      context.lineWidth = 3;
+      roundRectPath(context, -44, -24, 88, 48, 10);
+      context.fill();
+      context.stroke();
+      context.fillStyle = "rgba(20, 80, 40, 0.4)";
+      context.beginPath();
+      context.ellipse(0, 0, 14, 12, 0, 0, Math.PI * 2);
+      context.fill();
+      context.restore();
+    }
+
+    // Red packet at bottom center
+    context.globalAlpha = 0.95;
+    context.fillStyle = "rgba(205, 40, 40, 0.98)";
+    context.strokeStyle = "rgba(120, 10, 10, 0.8)";
+    context.lineWidth = 4;
+    roundRectPath(context, OUTPUT_SIZE / 2 - 34, OUTPUT_SIZE - 118, 68, 96, 14);
+    context.fill();
+    context.stroke();
+    context.fillStyle = "rgba(255, 210, 80, 0.95)";
+    context.beginPath();
+    context.ellipse(OUTPUT_SIZE / 2, OUTPUT_SIZE - 78, 9, 9, 0, 0, Math.PI * 2);
+    context.fill();
+
+    // Text style similar to meme: white with black outline near bottom
+    drawWeChatText(context, "谢谢老板", {
+      x: OUTPUT_SIZE / 2,
+      y: OUTPUT_SIZE - 52,
+      fontSize: 50,
+      fill: "#ffffff",
+      stroke: "#000000",
+      strokeW: 12,
+    });
+    context.restore();
+    return;
+  }
+
+  if (id === "newYear") {
+    // Red packets falling + golden-stroked red text
+    context.save();
+    for (const p of effectState.particles) {
+      const yy = ((p.y + t * p.v) % (OUTPUT_SIZE + 120)) - 60;
+      const xx = p.x + Math.sin(t * 1.2 + p.p) * 10;
+      context.save();
+      context.translate(xx, yy);
+      context.rotate(p.r);
+      context.globalAlpha = 0.92;
+      context.fillStyle = "rgba(185, 30, 30, 0.98)";
+      context.strokeStyle = "rgba(120, 10, 10, 0.85)";
+      context.lineWidth = 3;
+      roundRectPath(context, -18, -22, 36, 44, 10);
+      context.fill();
+      context.stroke();
+      context.fillStyle = "rgba(255, 210, 80, 0.85)";
+      context.fillRect(-10, -6, 20, 4);
+      context.restore();
+    }
+
+    // Big text
+    drawWeChatText(context, "新年好", {
+      x: OUTPUT_SIZE / 2,
+      y: OUTPUT_SIZE * 0.68,
+      fontSize: 86,
+      fill: "#b21d1d",
+      stroke: "#f2c25c",
+      strokeW: 14,
+    });
+    context.restore();
+    return;
+  }
+
+  if (id === "gongXiFaCai") {
+    // Sparkles + bottom meme text
+    context.save();
+    for (const s of effectState.particles) {
+      const phase = t * s.v + s.p;
+      const alpha = 0.25 + 0.35 * (0.5 + 0.5 * Math.sin(phase));
+      context.globalAlpha = alpha;
+      context.fillStyle = "rgba(255, 210, 80, 0.9)";
+      context.beginPath();
+      context.ellipse(s.x, s.y, 3 + 3 * (0.5 + 0.5 * Math.sin(phase)), 3, 0, 0, Math.PI * 2);
+      context.fill();
+    }
+    drawWeChatText(context, "恭喜发财", {
+      x: OUTPUT_SIZE / 2,
+      y: OUTPUT_SIZE - 54,
+      fontSize: 58,
+      fill: "#ffffff",
+      stroke: "#000000",
+      strokeW: 12,
+    });
+    context.restore();
+  }
+}
 
 function setStatus(text, tone = "normal") {
   els.status.textContent = text || "";
@@ -310,6 +478,7 @@ function drawFrame() {
   }
 
   drawSticker(ctx);
+  drawEffectOverlay(ctx, performance.now());
   drawSubtitle(ctx, captionText);
 
   ctx.restore();
@@ -540,6 +709,29 @@ function revokeLastGifUrl() {
   lastGifUrl = null;
 }
 
+function setShutterProgress(p) {
+  const v = Math.max(0, Math.min(1, p || 0));
+  els.btnShutter.style.setProperty("--p", String(v));
+}
+
+function stopShutterProgress() {
+  if (shutterProgressRaf) cancelAnimationFrame(shutterProgressRaf);
+  shutterProgressRaf = 0;
+}
+
+function startShutterProgress(durationMs) {
+  stopShutterProgress();
+  shutterProgressDuration = durationMs;
+  shutterProgressStart = performance.now();
+  const tick = () => {
+    const t = performance.now() - shutterProgressStart;
+    setShutterProgress(t / shutterProgressDuration);
+    if (t < shutterProgressDuration) shutterProgressRaf = requestAnimationFrame(tick);
+  };
+  setShutterProgress(0);
+  shutterProgressRaf = requestAnimationFrame(tick);
+}
+
 async function startPreview() {
   hideResult();
   if (isPreviewing) stopPreview();
@@ -597,6 +789,7 @@ async function recordGif3s() {
   isRecording = true;
   els.btnShutter.classList.add("is-busy");
   setProgress("");
+  startShutterProgress(DURATION_S * 1000);
 
   revokeLastGifUrl();
   lastGifBlob = null;
@@ -630,6 +823,8 @@ async function recordGif3s() {
       setProgress("");
       isRecording = false;
       els.btnShutter.classList.remove("is-busy");
+      stopShutterProgress();
+      setShutterProgress(1);
       showResult();
     });
   }
@@ -718,6 +913,8 @@ async function recordGif3s() {
       setProgress("");
       isRecording = false;
       els.btnShutter.classList.remove("is-busy");
+      stopShutterProgress();
+      setShutterProgress(1);
       showResult();
     });
 
@@ -795,6 +992,7 @@ function hideResult() {
   els.gifPreview.removeAttribute("src");
   els.sheet.hidden = false;
   els.resultPanel.hidden = true;
+  setShutterProgress(0);
 }
 
 function setEffect(effectId) {
@@ -806,8 +1004,48 @@ function setEffect(effectId) {
   if (!eff.sticker) {
     stickerImg = null;
   } else if (stickers.length) {
-    const idx = ["glasses", "mustache", "crown"].indexOf(eff.id);
+    const idx = ["thanksBoss", "newYear", "gongXiFaCai"].indexOf(eff.id);
     if (idx >= 0 && stickers[idx]) stickerImg = stickers[idx];
+  }
+
+  // Effect overlay state
+  effectState = {
+    id: eff.id,
+    startedAt: performance.now(),
+    seed: hashSeed(eff.id),
+    particles: [],
+  };
+  const rnd = seededRandom(effectState.seed);
+  if (eff.id === "thanksBoss") {
+    for (let i = 0; i < 14; i++) {
+      effectState.particles.push({
+        x: rnd() * OUTPUT_SIZE,
+        y: rnd() * OUTPUT_SIZE,
+        r: (rnd() - 0.5) * 1.0,
+        s: 0.75 + rnd() * 0.65,
+        w: 0.6 + rnd() * 0.9,
+        p: rnd() * Math.PI * 2,
+      });
+    }
+  } else if (eff.id === "newYear") {
+    for (let i = 0; i < 10; i++) {
+      effectState.particles.push({
+        x: rnd() * OUTPUT_SIZE,
+        y: rnd() * (OUTPUT_SIZE + 120),
+        v: 120 + rnd() * 160,
+        r: (rnd() - 0.5) * 0.6,
+        p: rnd() * Math.PI * 2,
+      });
+    }
+  } else if (eff.id === "gongXiFaCai") {
+    for (let i = 0; i < 26; i++) {
+      effectState.particles.push({
+        x: rnd() * OUTPUT_SIZE,
+        y: rnd() * OUTPUT_SIZE * 0.9,
+        v: 1.8 + rnd() * 2.8,
+        p: rnd() * Math.PI * 2,
+      });
+    }
   }
 
   renderEffectSelections();
@@ -923,14 +1161,47 @@ els.btnSheetHandle.addEventListener("click", () => {
 });
 els.btnDockChevron.addEventListener("click", () => setSheetExpanded(true));
 
-els.btnShutter.addEventListener("click", async () => {
+async function shutterAction() {
   if (isRecording) return;
   if (!isPreviewing) {
     await startPreview();
+    // If user is holding the shutter, start recording after preview is ready.
+    if (isPreviewing) await recordGif3s();
     return;
   }
   await recordGif3s();
-});
+}
+
+function bindShutterHold() {
+  const el = els.btnShutter;
+  let holding = false;
+
+  const onDown = async (e) => {
+    try {
+      e.preventDefault();
+      e.stopPropagation();
+    } catch {
+      // ignore
+    }
+    if (holding) return;
+    holding = true;
+    await shutterAction();
+  };
+  const onUp = () => {
+    holding = false;
+  };
+
+  el.addEventListener("pointerdown", onDown, { passive: false });
+  window.addEventListener("pointerup", onUp, { passive: true });
+  window.addEventListener("pointercancel", onUp, { passive: true });
+
+  // Fallbacks for older iOS WebViews:
+  el.addEventListener("touchstart", onDown, { passive: false });
+  window.addEventListener("touchend", onUp, { passive: true });
+  window.addEventListener("touchcancel", onUp, { passive: true });
+  el.addEventListener("mousedown", onDown);
+  window.addEventListener("mouseup", onUp);
+}
 
 els.btnSwitchCam.addEventListener("click", async () => {
   currentFacingMode = currentFacingMode === "user" ? "environment" : "user";
@@ -962,5 +1233,6 @@ renderEffects();
 setSubtitleMode("realtime");
 setSheetExpanded(false);
 setEffect(selectedEffectId);
+bindShutterHold();
 
 window.addEventListener("pagehide", () => stopPreview());
