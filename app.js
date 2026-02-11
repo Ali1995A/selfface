@@ -1093,6 +1093,16 @@ function hideResult() {
   setShutterProgress(0);
 }
 
+function resetToDefaultView() {
+  hideResult();
+  setSheetExpanded(false);
+  stopShutterProgress();
+  els.btnShutter.classList.remove("is-busy");
+  setShutterProgress(0);
+  setProgress("");
+  setStatus("点击快门开始预览");
+}
+
 function setEffect(effectId) {
   selectedEffectId = effectId;
   const eff = effects.find((e) => e.id === effectId) || effects[0];
@@ -1329,12 +1339,21 @@ els.btnSubStable.addEventListener("click", () => setSubtitleMode("stable"));
 // First paint
 ctx.fillStyle = "#000";
 ctx.fillRect(0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
-setStatus("点击快门开始预览");
-setProgress("");
+resetToDefaultView();
 renderEffects();
 setSubtitleMode("realtime");
 setSheetExpanded(false);
 setEffect(selectedEffectId);
 bindShutterHold();
 
-window.addEventListener("pagehide", () => stopPreview());
+// iOS Safari may restore DOM state via BFCache; ensure we don't show mixed panels.
+window.addEventListener("pageshow", (e) => {
+  if (e.persisted) {
+    stopPreview();
+    resetToDefaultView();
+  }
+});
+window.addEventListener("pagehide", () => {
+  stopPreview();
+  resetToDefaultView();
+});
