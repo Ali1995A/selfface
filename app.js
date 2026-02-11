@@ -1306,6 +1306,11 @@ function drawSticker(context) {
   context.globalAlpha = baseAlpha * fade;
   context.translate(x + s * (placement.offsetX || 0), y + s * (placement.offsetY || -0.08));
   context.rotate(rz);
+
+   // Some asymmetric stickers should mirror with the selfie preview.
+   // (Text overlays are drawn separately and remain readable.)
+   const mirrorSticker = currentFacingMode !== "environment" && currentEffect?.mirrorSticker !== false;
+   if (mirrorSticker) context.scale(-1, 1);
   try {
     context.drawImage(stickerImg, -w / 2, -h / 2, w, h);
   } catch (e) {
