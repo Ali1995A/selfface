@@ -103,6 +103,20 @@ button{font:inherit}
   width:100%;
   height:100%;
   display:block;
+  position:relative;
+  z-index:2;
+}
+
+.wx-card > #inputVideo{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  /* Keep it effectively invisible but still decodable/drawable on iOS. */
+  opacity:0.001;
+  pointer-events:none;
+  z-index:1;
 }
 
 .wx-gif{
@@ -543,13 +557,12 @@ button{font:inherit}
 }
 
 /* Hidden elements (video/jeeliz canvas) */
-#inputVideo,#jeelizCanvas{
+#jeelizCanvas{
   position:fixed;
   left:0;
   top:0;
-  /* iOS Safari may not decode frames reliably when the <video> is 1x1 or fully offscreen. */
-  width:320px;
-  height:240px;
+  width:1px;
+  height:1px;
   opacity:0;
   pointer-events:none;
   z-index:0;

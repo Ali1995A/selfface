@@ -1309,7 +1309,16 @@ function drawFrame() {
     // Beauty filter (if supported by the browser).
     const canFilter = "filter" in ctx;
     if (BEAUTY.enabled && canFilter) ctx.filter = BEAUTY.videoFilter;
-    ctx.drawImage(v, sx, sy, side, side, 0, 0, cw, ch);
+    try {
+      ctx.drawImage(v, sx, sy, side, side, 0, 0, cw, ch);
+    } catch (e) {
+      // iOS Safari/WebViews can occasionally throw from drawImage(video). Keep rendering loop alive.
+      console.warn("drawImage(video) failed", e);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.filter = "none";
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, cw, ch);
+    }
     if (canFilter) ctx.filter = "none";
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   } else {
