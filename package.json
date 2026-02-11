@@ -1,0 +1,15 @@
+{
+  "name": "selfface",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "dev:https": "vite --host 0.0.0.0 --https",
+    "build": "vite build && node scripts/copy-assets.mjs",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^1.2.0",
+    "vite": "^5.4.0"
+  }
+}

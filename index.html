@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>selfface</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="wx">
+      <header class="wx-top">
+        <div class="wx-notchWrap" aria-hidden="true">
+          <div class="wx-notch">
+            <span class="wx-notchDot"></span>
+          </div>
+        </div>
+        <div id="effectFrom" class="wx-source">特效来自：<span id="effectFromName">WeChat Effect</span></div>
+      </header>
+
+      <section class="wx-stage">
+        <div class="wx-card">
+          <canvas id="outputCanvas" width="360" height="360"></canvas>
+          <img id="gifPreview" class="wx-gif" alt="GIF预览" />
+          <button id="btnSwitchCam" class="wx-camSwitch" aria-label="切换摄像头" type="button"></button>
+        </div>
+      </section>
+
+      <section id="sheet" class="wx-sheet wx-sheet--collapsed" aria-label="特效选择">
+        <button id="btnSheetHandle" class="wx-sheetHandle" type="button" aria-label="展开/收起特效面板"></button>
+
+        <div id="sheetCollapsed" class="wx-sheetCollapsed">
+          <div id="effectStrip" class="wx-strip" role="list"></div>
+        </div>
+
+        <div id="sheetExpanded" class="wx-sheetExpanded" hidden>
+          <div class="wx-sheetHeader">
+            <div class="wx-sheetTitle">更多特效</div>
+            <div class="wx-subtitleMode" role="group" aria-label="字幕模式">
+              <button id="btnSubRealtime" class="wx-subBtn" type="button">实时字幕优先</button>
+              <button id="btnSubStable" class="wx-subBtn" type="button">稳定字幕优先</button>
+            </div>
+          </div>
+          <div id="effectGrid" class="wx-grid" role="list"></div>
+        </div>
+
+        <div id="shutterDock" class="wx-shutterDock" aria-label="拍摄">
+          <button id="btnDockChevron" class="wx-chevron" type="button" aria-label="展开特效面板"></button>
+          <button id="btnShutter" class="wx-shutter" type="button" aria-label="拍摄"></button>
+        </div>
+
+        <div class="wx-hud" aria-live="polite">
+          <div id="statusLine" class="wx-status"></div>
+          <div id="progressLine" class="wx-progress"></div>
+        </div>
+      </section>
+
+      <section id="resultPanel" class="wx-result" hidden aria-label="拍摄结果">
+        <div class="wx-resultTools">
+          <button class="wx-tool" type="button" disabled aria-label="去背景">
+            <span class="wx-toolIcon wx-toolIcon--cutout" aria-hidden="true"></span>
+            <span class="wx-toolText">去背景</span>
+          </button>
+          <button class="wx-tool" type="button" disabled aria-label="快速播放">
+            <span class="wx-toolIcon wx-toolIcon--fast" aria-hidden="true"></span>
+            <span class="wx-toolText">快速播放</span>
+          </button>
+          <button class="wx-tool" type="button" disabled aria-label="贴表情">
+            <span class="wx-toolIcon wx-toolIcon--sticker" aria-hidden="true"></span>
+            <span class="wx-toolText">贴表情</span>
+          </button>
+        </div>
+
+        <div class="wx-resultActions">
+          <button id="btnRetake" class="wx-action" type="button" aria-label="重拍">
+            <span class="wx-actionIcon wx-actionIcon--retake" aria-hidden="true"></span>
+            <span class="wx-actionText">重拍</span>
+          </button>
+          <button id="btnAdd" class="wx-action wx-action--primary" type="button" aria-label="添加并下载">
+            <span class="wx-actionIcon wx-actionIcon--add" aria-hidden="true"></span>
+            <span class="wx-actionText">添加</span>
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <!-- Hidden elements -->
+    <video id="inputVideo" playsinline muted autoplay></video>
+    <canvas id="jeelizCanvas" width="256" height="256"></canvas>
+
+    <script src="./assets/stt/coi-serviceworker.js"></script>
+    <script src="./assets/libs/gif.js"></script>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
