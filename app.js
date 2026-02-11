@@ -86,6 +86,7 @@ let resultEdits = { cutout: false, fast: false, emojiImg: null }; // emojiImg: H
 let pendingPreviewStart = false;
 let pendingWhisperRealtimeStart = false;
 let pendingCoiReload = false;
+let resumePreviewPromise = null;
 let currentFacingMode = "user"; // "user" | "environment"
 let hasMic = false;
 let hasRequestedPermissions = false;
@@ -2069,46 +2070,8 @@ function startShutterProgress(durationMs) {
   shutterProgressRaf = requestAnimationFrame(tick);
 }
 
-async function startPreview() {
-  hideResult();
-  pendingPreviewStart = false;
-  if (isPreviewing) stopPreview();
-  setProgress("");
-  setStatus("初始化中：请求摄像头/麦克风权限…");
-
-  try {
-    await preloadStickers();
-  } catch {
-    // Stickers missing shouldn't block preview.
-  }
-
-  let gotStream = false;
-  const permHintTo = setTimeout(() => {
-    if (gotStream) return;
-    setProgress("如果没有弹出授权弹窗：请检查 iPad/微信的摄像头与麦克风权限，然后点按页面任意位置再试");
-  }, 2500);
-
-  try {
-    mediaStream = await ensureMediaStream();
-    gotStream = true;
-  } catch (err) {
-    setStatus(`权限被拒绝或设备不可用：${err?.message || err}`, "error");
-    clearTimeout(permHintTo);
-    return;
-  } finally {
-    clearTimeout(permHintTo);
-  }
-
-  try {
-    attachStreamToVideo(mediaStream);
-    await ensureVideoReady(els.video, { timeoutMs: 15000 });
-  } catch (err) {
-    // Common on iOS: permission granted but playback needs user gesture.
-    pendingPreviewStart = true;
-    setStatus("已获取权限但预览未启动：请点按任意按钮/页面一次以启动预览", "error");
-    isPreviewing = false;
-    return;
-  }
+async function finalizePreviewStart() {
+  if (isPreviewing) return;
 
   // After preview is running, request mic in background (won't block preview).
   startMicRequestInBackground();
@@ -2148,8 +2111,78 @@ async function startPreview() {
   drawFrame();
 }
 
+async function resumePendingPreviewStart({ timeoutMs = 9000 } = {}) {
+  if (isPreviewing) return;
+  if (!pendingPreviewStart) return;
+  if (!streamIsLive(mediaStream)) return;
+  if (resumePreviewPromise) return resumePreviewPromise;
+
+  resumePreviewPromise = (async () => {
+    try {
+      // Keep the same stream; just try to start playback after the user gesture.
+      attachStreamToVideo(mediaStream);
+      await ensureVideoReady(els.video, { timeoutMs });
+    } catch {
+      return;
+    }
+    pendingPreviewStart = false;
+    await finalizePreviewStart();
+  })().finally(() => {
+    resumePreviewPromise = null;
+  });
+
+  return resumePreviewPromise;
+}
+
+async function startPreview() {
+  hideResult();
+  pendingPreviewStart = false;
+  if (isPreviewing) stopPreview();
+  setProgress("");
+  setStatus("初始化中：请求摄像头/麦克风权限…");
+
+  try {
+    await preloadStickers();
+  } catch {
+    // Stickers missing shouldn't block preview.
+  }
+
+  let gotStream = false;
+  const permHintTo = setTimeout(() => {
+    if (gotStream) return;
+    setProgress("如果没有弹出授权弹窗：请检查 iPad/微信的摄像头与麦克风权限，然后点按页面任意位置再试");
+  }, 2500);
+
+  try {
+    mediaStream = await ensureMediaStream();
+    gotStream = true;
+  } catch (err) {
+    setStatus(`权限被拒绝或设备不可用：${err?.message || err}`, "error");
+    clearTimeout(permHintTo);
+    return;
+  } finally {
+    clearTimeout(permHintTo);
+  }
+
+  try {
+    attachStreamToVideo(mediaStream);
+    await ensureVideoReady(els.video, { timeoutMs: 15000 });
+  } catch (err) {
+    // Common on iOS: permission granted but playback needs user gesture.
+    pendingPreviewStart = true;
+    setStatus("已获取权限但预览未启动：请点按任意按钮/页面一次以启动预览", "error");
+    return;
+  }
+
+  await finalizePreviewStart();
+}
+
 async function recordGif3s() {
   if (!isPreviewing || isRecording) return;
+  if (!els.video.videoWidth || !els.video.videoHeight) {
+    setStatus("预览未就绪：请等待摄像头画面出现后再录制", "error");
+    return;
+  }
   isRecording = true;
   els.btnShutter.classList.add("is-busy");
   setProgress("");
@@ -2431,6 +2464,100 @@ function setSubtitleMode(nextMode) {
   }
 }
 
+function bindTap(el, onTap, { moveThreshold = 10, maxPressMs = 700 } = {}) {
+  let startX = 0;
+  let startY = 0;
+  let startAt = 0;
+  let moved = false;
+  let lastFireAt = 0;
+
+  const nowMs = () => performance.now();
+
+  const setStart = (x, y) => {
+    startX = x;
+    startY = y;
+    startAt = nowMs();
+    moved = false;
+  };
+  const markMove = (x, y) => {
+    if (moved) return;
+    const dx = x - startX;
+    const dy = y - startY;
+    if (dx * dx + dy * dy > moveThreshold * moveThreshold) moved = true;
+  };
+
+  const fire = (e) => {
+    const t = nowMs();
+    if (t - lastFireAt < 320) return; // avoid double-fire from touchend + click
+    lastFireAt = t;
+    try {
+      e?.preventDefault?.();
+      e?.stopPropagation?.();
+    } catch {
+      // ignore
+    }
+    onTap(e);
+  };
+
+  el.addEventListener(
+    "pointerdown",
+    (e) => {
+      if (e.isPrimary === false) return;
+      setStart(e.clientX || 0, e.clientY || 0);
+    },
+    { passive: true },
+  );
+  el.addEventListener(
+    "pointermove",
+    (e) => {
+      if (e.isPrimary === false) return;
+      markMove(e.clientX || 0, e.clientY || 0);
+    },
+    { passive: true },
+  );
+  el.addEventListener(
+    "pointerup",
+    (e) => {
+      if (e.isPrimary === false) return;
+      if (moved) return;
+      if (nowMs() - startAt > maxPressMs) return;
+      fire(e);
+    },
+    { passive: false },
+  );
+
+  // iOS WeChat WebView fallback:
+  el.addEventListener(
+    "touchstart",
+    (e) => {
+      const t = e.touches && e.touches[0];
+      if (!t) return;
+      setStart(t.clientX || 0, t.clientY || 0);
+    },
+    { passive: true },
+  );
+  el.addEventListener(
+    "touchmove",
+    (e) => {
+      const t = e.touches && e.touches[0];
+      if (!t) return;
+      markMove(t.clientX || 0, t.clientY || 0);
+    },
+    { passive: true },
+  );
+  el.addEventListener(
+    "touchend",
+    (e) => {
+      if (moved) return;
+      if (nowMs() - startAt > maxPressMs) return;
+      fire(e);
+    },
+    { passive: false },
+  );
+
+  el.addEventListener("click", (e) => fire(e));
+}
+
 function setSheetExpanded(expanded) {
   const isExpanded = !!expanded;
   els.sheet.classList.toggle("wx-sheet--collapsed", !isExpanded);
@@ -2673,7 +2800,7 @@ function makeEffectThumb(effect) {
   item.appendChild(thumb);
   item.appendChild(label);
 
-  item.addEventListener("click", () => {
+  bindTap(item, () => {
     try {
       if (effect.id === "more") {
         setSheetExpanded(true);
@@ -2729,7 +2856,7 @@ function makeGridItem(effect) {
   item.appendChild(icon);
   item.appendChild(label);
 
-  item.addEventListener("click", () => {
+  bindTap(item, () => {
     try {
       if (effect.id === "more") return;
       setEffect(effect.id);
@@ -2840,7 +2967,7 @@ function onAnyUserGesture() {
 
   // If preview couldn't start due to gesture restriction, retry now.
   if (pendingPreviewStart && !isPreviewing && streamIsLive(mediaStream)) {
-    startPreview().catch(() => {});
+    resumePendingPreviewStart().catch(() => {});
   }
 
   // If whisper realtime captions couldn't start due to gesture restriction, retry now.
@@ -2854,6 +2981,8 @@ function onAnyUserGesture() {
 // iOS gesture hooks: don't block clicks.
 window.addEventListener("pointerup", onAnyUserGesture, { passive: true });
 window.addEventListener("touchend", onAnyUserGesture, { passive: true });
+window.addEventListener("pointerdown", onAnyUserGesture, { passive: true });
+window.addEventListener("touchstart", onAnyUserGesture, { passive: true });
 
 els.btnSwitchCam.addEventListener("click", async () => {
   currentFacingMode = currentFacingMode === "user" ? "environment" : "user";
