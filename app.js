@@ -12,10 +12,6 @@ const DURATION_S = 3;
 const FRAME_COUNT = FPS * DURATION_S;
 const FRAME_DELAY_MS = Math.round(1000 / FPS);
 
-const COI_SW_URL = "./coi-sw.js";
-const COI_RELOAD_KEY = "selfface_coi_reloaded_at";
-const COI_FAILED_KEY = "selfface_coi_failed";
-
 const BEAUTY = {
   enabled: true,
   // Cheap GPU-ish filter applied during video draw (if supported).
@@ -61,16 +57,11 @@ const els = {
   btnToolFast: document.getElementById("btnToolFast"),
   btnToolEmoji: document.getElementById("btnToolEmoji"),
   emojiFile: document.getElementById("emojiFile"),
-
-  btnSubRealtime: document.getElementById("btnSubRealtime"),
-  btnSubStable: document.getElementById("btnSubStable"),
 };
 
 const ctx = els.canvas.getContext("2d", { alpha: false, desynchronized: true });
 
 let mediaStream = null;
-let micStream = null;
-let micRequestPromise = null;
 let faceState = null;
 let faceSmooth = null; // { x,y,s,rz,detected,lastMs,lastSeenMs }
 let rafId = 0;
@@ -80,15 +71,12 @@ let lastGifBlob = null;
 let lastGifUrl = null;
 let lastOriginalGifBlob = null;
 let lastOriginalGifUrl = null;
-let lastCapture = null; // { frames: ImageData[], faces: (FaceRegion|null)[], delayMs:number, w:number, h:number, caption:string }
+let lastCapture = null; // { frames: ImageData[], faces: (FaceRegion|null)[], delayMs:number, w:number, h:number }
 let isReencoding = false;
 let resultEdits = { cutout: false, fast: false, emojiImg: null }; // emojiImg: HTMLImageElement|null
 let pendingPreviewStart = false;
-let pendingWhisperRealtimeStart = false;
-let pendingCoiReload = false;
 let resumePreviewPromise = null;
 let currentFacingMode = "user"; // "user" | "environment"
-let hasMic = false;
 let hasRequestedPermissions = false;
 let lastStreamFacingMode = null;
 
@@ -99,16 +87,7 @@ let imageLoading = new Map(); // url -> Promise<Image|null>
 let currentEffect = null;
 let frameImg = null;
 
-let captionText = "";
-let captionSource = "none"; // "webspeech" | "whisper" | "none"
-let webSpeech = null;
-let whisperTranscriber = null;
-let whisperReady = false;
-let whisperInitPromise = null;
-let whisperTextListener = null; // (text: string) => void
-let whisperIsRecording = false;
-let whisperNeedsUserGesture = false;
-let subtitleMode = "realtime"; // "realtime" | "stable"
+// Speech-to-text / subtitles are temporarily removed (per product decision).
 
 const effects = [
   { id: "none", name: "无特效", from: "WeChat Effect", sticker: null, thumb: "none" },
@@ -800,46 +779,6 @@ async function preloadStickers() {
   stickerReady = true;
 }
 
-function startMicRequestInBackground() {
-  if (micRequestPromise) return micRequestPromise;
-  if (!navigator.mediaDevices?.getUserMedia) return Promise.resolve(null);
-
-  micRequestPromise = navigator.mediaDevices
-    .getUserMedia({ audio: true, video: false })
-    .then((audioStream) => {
-      const tracks = audioStream.getAudioTracks();
-      if (!tracks.length) return null;
-      const [track] = tracks;
-
-      stopTracks(micStream);
-      micStream = new MediaStream([track]);
-      hasMic = true;
-
-      // Attach to the main stream too (if missing), so downstream code sees audio present.
-      try {
-        if (streamIsLive(mediaStream) && mediaStream.getAudioTracks().length === 0) {
-          mediaStream.addTrack(track);
-        }
-      } catch {
-        // ignore
-      }
-
-      return micStream;
-    })
-    .catch((e) => {
-      console.warn(e);
-      return null;
-    })
-    .finally(() => {
-      // If we didn't get a live mic track, allow retry later.
-      if (!streamIsLive(micStream) || micStream.getAudioTracks().length === 0) {
-        micRequestPromise = null;
-      }
-    });
-
-  return micRequestPromise;
-}
-
 function stopTracks(stream) {
   if (!stream) return;
   for (const t of stream.getTracks()) t.stop();
@@ -873,15 +812,13 @@ function tryResumeVideoPlayback() {
 
 async function requestMedia(facingMode) {
   if (!isSecureContextOk()) {
-    throw new Error("必须在 HTTPS（或 localhost）下才能调用摄像头/麦克风。");
+    throw new Error("必须在 HTTPS（或 localhost）下才能调用摄像头。");
   }
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    throw new Error("当前浏览器不支持 getUserMedia（无法调用摄像头/麦克风）。");
+    throw new Error("当前浏览器不支持 getUserMedia（无法调用摄像头）。");
   }
 
-  // iOS / some WebViews can be flaky when requesting camera+mic in a single call.
-  // Request camera first (to ensure preview starts). Request mic separately in background
-  // (avoids hanging the whole init flow if the mic prompt is delayed/suppressed).
+  // iOS / some WebViews can be flaky with permissions; keep it camera-only.
   const videoStream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: facingMode || "user" },
     audio: false,
@@ -903,31 +840,13 @@ async function ensureMediaStream() {
   if (!needNew) return mediaStream;
 
   stopTracks(mediaStream);
-  stopTracks(micStream);
   mediaStream = null;
-  micStream = null;
-  hasMic = false;
 
   const stream = await requestMedia(currentFacingMode);
   mediaStream = stream;
   lastStreamFacingMode = currentFacingMode;
   hasRequestedPermissions = true;
-
-  const audioTracks = stream.getAudioTracks();
-  hasMic = audioTracks.length > 0;
-  micStream = hasMic ? new MediaStream(audioTracks) : null;
   return stream;
-}
-
-async function ensureMicOnlyStream() {
-  // Try to obtain an audio track even if the camera stream doesn't include one (common on some iOS WebViews).
-  if (streamIsLive(micStream) && micStream.getAudioTracks().length > 0) {
-    hasMic = true;
-    return micStream;
-  }
-  const s = await startMicRequestInBackground();
-  if (streamIsLive(s) && s.getAudioTracks().length > 0) return s;
-  return null;
 }
 
 async function ensureVideoReady(videoEl, { timeoutMs = 12000 } = {}) {
@@ -982,58 +901,6 @@ function destroyJeeliz() {
   } catch {
     // ignore
   }
-}
-
-function drawSubtitle(context, text) {
-  if (!text) return;
-
-  const padding = 12;
-  const maxWidth = OUTPUT_SIZE - padding * 2;
-  const fontSize = 18;
-
-  context.save();
-  context.font = `600 ${fontSize}px -apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans SC",sans-serif`;
-  context.textBaseline = "bottom";
-
-  // Simple wrap (1-2 lines)
-  const words = text.split(/\s+/).filter(Boolean);
-  const lines = [];
-  let line = "";
-  for (const w of words.length ? words : [text]) {
-    const next = line ? `${line} ${w}` : w;
-    if (context.measureText(next).width <= maxWidth || !line) {
-      line = next;
-    } else {
-      lines.push(line);
-      line = w;
-      if (lines.length >= 1) break;
-    }
-  }
-  if (line) lines.push(line);
-
-  const lineHeight = Math.round(fontSize * 1.25);
-  const blockHeight = lines.length * lineHeight + 14;
-  const x = OUTPUT_SIZE / 2;
-  const yBottom = OUTPUT_SIZE - 14;
-
-  // Background
-  context.fillStyle = "rgba(0,0,0,0.55)";
-  context.strokeStyle = "rgba(255,255,255,0.15)";
-  context.lineWidth = 1;
-  roundRect(context, padding, yBottom - blockHeight, OUTPUT_SIZE - padding * 2, blockHeight, 12);
-  context.fill();
-  context.stroke();
-
-  // Text (shadow)
-  context.fillStyle = "rgba(255,255,255,0.95)";
-  context.shadowColor = "rgba(0,0,0,0.65)";
-  context.shadowBlur = 8;
-  context.shadowOffsetY = 2;
-  for (let i = 0; i < lines.length; i++) {
-    context.textAlign = "center";
-    context.fillText(lines[i], x, yBottom - 10 - (lines.length - 1 - i) * lineHeight);
-  }
-  context.restore();
 }
 
 function roundRect(context, x, y, w, h, r) {
@@ -1362,7 +1229,6 @@ function drawFrame() {
   drawSticker(ctx);
   drawEffectOverlay(ctx, now);
   drawFrameOverlay(ctx);
-  drawSubtitle(ctx, captionText);
 
   ctx.restore();
 
@@ -1465,419 +1331,10 @@ function stopPreview() {
   rafId = 0;
   destroyJeeliz();
   stopTracks(mediaStream);
-  stopTracks(micStream);
   mediaStream = null;
-  micStream = null;
-  micRequestPromise = null;
-  hasMic = false;
   lastStreamFacingMode = null;
   faceState = null;
   faceSmooth = null;
-  stopWebSpeech();
-  stopWhisperCaptions();
-}
-
-function canUseWebSpeech() {
-  return "webkitSpeechRecognition" in window || "SpeechRecognition" in window;
-}
-
-function looksLikeSABOrCOIError(err) {
-  const msg = String(err?.message || err || "").toLowerCase();
-  return (
-    msg.includes("sharedarraybuffer") ||
-    msg.includes("crossoriginisolated") ||
-    msg.includes("cross-origin-isolated") ||
-    msg.includes("coep") ||
-    msg.includes("coop") ||
-    msg.includes("cross-origin")
-  );
-}
-
-function startWebSpeech() {
-  try {
-    const Ctor = window.webkitSpeechRecognition || window.SpeechRecognition;
-    const rec = new Ctor();
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.lang = "zh-CN";
-
-    webSpeech = rec;
-
-    rec.onresult = (e) => {
-      let interim = "";
-      let final = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const r = e.results[i];
-        if (r.isFinal) final += r[0].transcript;
-        else interim += r[0].transcript;
-      }
-      const next = (final || interim || "").trim();
-      if (next) {
-        captionText = next;
-        captionSource = "webspeech";
-      }
-    };
-    rec.onerror = async (e) => {
-      // Some WebViews expose the API but fail at runtime ("not-allowed" / "service-not-allowed").
-      const err = String(e?.error || "").toLowerCase();
-      stopWebSpeech();
-
-      // Fallback to whisper realtime captions if possible.
-      if (subtitleMode === "realtime" && !isRecording) {
-        try {
-          if (!hasMic) await ensureMicOnlyStream();
-          await startWhisperRealtimeCaptions({ allowReload: false });
-          setStatus("系统语音识别不可用：已切换到 whisper.wasm");
-          return;
-        } catch (werr) {
-          console.warn(werr);
-          pendingWhisperRealtimeStart = true;
-        }
-      }
-
-      if (subtitleMode === "realtime") {
-        // Don't over-emphasize WebSpeech failure; in iOS/WeChat this is expected.
-        setStatus("系统语音识别不可用：将使用 whisper.wasm（点按任意位置可再试/启动）", "error");
-        return;
-      }
-
-      if (err.includes("not-allowed") || err.includes("service-not-allowed")) {
-        setStatus("系统语音识别不可用：未获得麦克风权限或系统不支持语音识别", "error");
-      } else {
-        setStatus("系统语音识别出错：请切换到“稳定字幕优先”或使用 whisper.wasm", "error");
-      }
-    };
-    rec.onend = () => {
-      // iOS/WebView often ends automatically; try restart while previewing and not recording stable mode.
-      if (isPreviewing && subtitleMode === "realtime" && !isRecording) {
-        try {
-          rec.start();
-        } catch {
-          // ignore
-        }
-      }
-    };
-    rec.start();
-  } catch {
-    webSpeech = null;
-  }
-}
-
-function stopWebSpeech() {
-  if (!webSpeech) return;
-  try {
-    webSpeech.onresult = null;
-    webSpeech.onerror = null;
-    webSpeech.onend = null;
-    webSpeech.stop();
-  } catch {
-    // ignore
-  }
-  webSpeech = null;
-}
-
-function loadScriptOnce(src) {
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector(`script[data-src="${src}"]`);
-    if (existing) return resolve();
-    const s = document.createElement("script");
-    s.src = src;
-    s.async = true;
-    s.dataset.src = src;
-    s.onload = () => resolve();
-    s.onerror = reject;
-    document.head.appendChild(s);
-  });
-}
-
-function safeStorageGet(storage, key) {
-  try {
-    return storage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function safeStorageSet(storage, key, value) {
-  try {
-    storage.setItem(key, value);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function safeStorageRemove(storage, key) {
-  try {
-    storage.removeItem(key);
-  } catch {
-    // ignore
-  }
-}
-
-async function withConfirmBypassForLargeModelDownload(fn) {
-  const orig = window.confirm;
-  const shouldBypass = (msg) => {
-    const s = String(msg || "");
-    // whisper-web-transcriber uses a confirm like:
-    // "You are about to download 57 MB of data. The model data will be cached..."
-    return (
-      s.includes("You are about to download") &&
-      s.toLowerCase().includes("model data") &&
-      s.toLowerCase().includes("cached")
-    );
-  };
-
-  if (typeof orig !== "function") return fn();
-
-  try {
-    window.confirm = (msg) => {
-      if (shouldBypass(msg)) return true;
-      return orig(msg);
-    };
-    return await fn();
-  } finally {
-    window.confirm = orig;
-  }
-}
-
-function initCoiState() {
-  const attemptedAt = safeStorageGet(localStorage, COI_RELOAD_KEY);
-
-  if (crossOriginIsolated) {
-    safeStorageRemove(localStorage, COI_FAILED_KEY);
-    if (attemptedAt) safeStorageRemove(localStorage, COI_RELOAD_KEY);
-    return;
-  }
-
-  // If we already reloaded once for COI and still aren't isolated, don't try again.
-  if (attemptedAt) {
-    safeStorageSet(localStorage, COI_FAILED_KEY, "1");
-  }
-}
-
-function coiFailed() {
-  return safeStorageGet(localStorage, COI_FAILED_KEY) === "1";
-}
-
-async function ensureCoiForWhisper({ allowReload = false } = {}) {
-  if (crossOriginIsolated) return true;
-  if (coiFailed()) return false;
-  if (!("serviceWorker" in navigator)) return false;
-
-  try {
-    await navigator.serviceWorker.register(COI_SW_URL, { scope: "./" });
-    // Best-effort: give SW a moment to be ready.
-    try {
-      await navigator.serviceWorker.ready;
-    } catch {
-      // ignore
-    }
-  } catch (e) {
-    console.warn(e);
-    safeStorageSet(localStorage, COI_FAILED_KEY, "1");
-    return false;
-  }
-
-  // If this page isn't controlled yet, a single reload is needed for COI headers to apply.
-  if (!navigator.serviceWorker.controller) {
-    const alreadyReloaded = !!safeStorageGet(localStorage, COI_RELOAD_KEY);
-    if (!alreadyReloaded) {
-      if (allowReload) {
-        const stored = safeStorageSet(localStorage, COI_RELOAD_KEY, String(Date.now()));
-        if (!stored) {
-          // If we can't persist a guard flag, never auto-reload to avoid loops.
-          safeStorageSet(localStorage, COI_FAILED_KEY, "1");
-          return false;
-        }
-        setStatus("为启用字幕引擎（whisper.wasm），页面将刷新一次…");
-        location.reload();
-      } else {
-        pendingCoiReload = true;
-        setStatus("字幕引擎需要刷新一次才能启用：点按任意位置刷新", "error");
-      }
-      return false;
-    }
-    // Reload already happened but still no controller -> avoid loops.
-    safeStorageSet(localStorage, COI_FAILED_KEY, "1");
-    return false;
-  }
-
-  // Controlled but still not isolated -> likely not supported in this environment.
-  if (!crossOriginIsolated) {
-    safeStorageSet(localStorage, COI_FAILED_KEY, "1");
-    return false;
-  }
-
-  return true;
-}
-
-async function ensureWhisperReady() {
-  if (whisperReady) return;
-  if (whisperInitPromise) return whisperInitPromise;
-
-  whisperInitPromise = (async () => {
-    await loadScriptOnce("./assets/stt/whisper-web-transcriber.bundled.min.js");
-
-    const lib = window.WhisperTranscriber;
-    const Ctor = lib?.WhisperTranscriber;
-    if (typeof Ctor !== "function") {
-      throw new Error("whisper.wasm 相关脚本加载失败");
-    }
-
-    if (!crossOriginIsolated) {
-      // Not always a hard error, but many WASM builds need SharedArrayBuffer.
-      console.warn("crossOriginIsolated=false; whisper.wasm 可能不可用或很慢（建议配置 COOP/COEP 或启用 COI SW）。");
-    }
-
-    whisperTranscriber = new Ctor({
-      onStatus: (s) => {
-        if (typeof s === "string" && s) setProgress(s);
-      },
-      onProgress: (p) => {
-        if (typeof p === "number" && Number.isFinite(p)) setProgress(`${Math.round(p * 100)}%`);
-      },
-      onError: (err) => {
-        console.error(err);
-      },
-      onTranscription: (t) => {
-        const next = normalizeWhisperResult(t);
-        if (!next) return;
-        try {
-          whisperTextListener?.(next);
-        } catch {
-          // ignore
-        }
-      },
-      debug: false,
-    });
-
-    if (typeof whisperTranscriber.initialize === "function") {
-      await whisperTranscriber.initialize();
-    } else if (typeof whisperTranscriber.init === "function") {
-      await whisperTranscriber.init();
-    }
-
-    if (typeof whisperTranscriber.loadModel === "function") {
-      // The library may show a blocking confirm about downloading ~57MB.
-      // Bypass it and rely on our own status/progress UI instead.
-      setProgress("字幕模型下载中…");
-      await withConfirmBypassForLargeModelDownload(() => whisperTranscriber.loadModel());
-      setProgress("");
-    }
-
-    whisperReady = true;
-  })();
-
-  try {
-    await whisperInitPromise;
-  } finally {
-    if (!whisperReady) whisperInitPromise = null;
-  }
-}
-
-function normalizeWhisperResult(res) {
-  if (!res) return "";
-  if (typeof res === "string") return res.trim();
-  if (typeof res.text === "string") return res.text.trim();
-  if (typeof res.transcription === "string") return res.transcription.trim();
-  if (typeof res.transcribedText === "string") return res.transcribedText.trim();
-  return "";
-}
-
-function setWhisperTextListener(fn) {
-  whisperTextListener = typeof fn === "function" ? fn : null;
-}
-
-function whisperIsActuallyRecording() {
-  return !!(whisperIsRecording || whisperTranscriber?.isRecording);
-}
-
-async function startWhisperRealtimeCaptions({ allowReload = false } = {}) {
-  // Ensure mic stream is available (some iOS WebViews don't include audio tracks on the camera stream).
-  if (!hasMic) await ensureMicOnlyStream();
-  if (!crossOriginIsolated && !coiFailed()) {
-    // May require a single reload to enable SharedArrayBuffer.
-    await ensureCoiForWhisper({ allowReload });
-  }
-  await ensureWhisperReady();
-  if (typeof whisperTranscriber?.startRecording !== "function") {
-    throw new Error("whisper.wasm 不支持 startRecording（脚本版本不匹配或未初始化）");
-  }
-
-  setWhisperTextListener((text) => {
-    if (!isPreviewing) return;
-    if (subtitleMode !== "realtime") return;
-    captionText = text;
-    captionSource = "whisper";
-  });
-
-  if (whisperIsActuallyRecording()) return;
-
-  try {
-    await whisperTranscriber.startRecording();
-    whisperIsRecording = true;
-    whisperNeedsUserGesture = false;
-    pendingWhisperRealtimeStart = false;
-  } catch (e) {
-    // If COI/SAB is the real blocker, prompt a one-time reload when possible.
-    if (!crossOriginIsolated && !coiFailed() && looksLikeSABOrCOIError(e)) {
-      try {
-        await ensureCoiForWhisper({ allowReload: false });
-      } catch {
-        // ignore
-      }
-    }
-    // iOS/WebView often requires a user gesture to start audio capture/AudioContext.
-    whisperNeedsUserGesture = true;
-    pendingWhisperRealtimeStart = true;
-    throw e;
-  }
-}
-
-async function stopWhisperCaptions() {
-  setWhisperTextListener(null);
-  if (!whisperTranscriber) return;
-  if (!whisperIsActuallyRecording()) return;
-  try {
-    await whisperTranscriber.stopRecording();
-  } catch {
-    // ignore
-  }
-  whisperIsRecording = false;
-}
-
-async function transcribeStableDuringRecording(durationMs) {
-  if (!hasMic) await ensureMicOnlyStream();
-  if (!crossOriginIsolated && !coiFailed()) {
-    // May require a single reload to enable SharedArrayBuffer.
-    await ensureCoiForWhisper({ allowReload: true });
-  }
-  await ensureWhisperReady();
-  if (typeof whisperTranscriber?.startRecording !== "function") {
-    throw new Error("whisper.wasm 不支持 startRecording（脚本版本不匹配或未初始化）");
-  }
-
-  let lastText = "";
-  const prevListener = whisperTextListener;
-  setWhisperTextListener((text) => {
-    if (text) lastText = text;
-  });
-
-  try {
-    await whisperTranscriber.startRecording();
-    whisperIsRecording = true;
-    whisperNeedsUserGesture = false;
-    await new Promise((r) => setTimeout(r, durationMs));
-    await whisperTranscriber.stopRecording();
-  } finally {
-    setWhisperTextListener(prevListener);
-    whisperIsRecording = false;
-  }
-
-  // Give it a short time to flush.
-  await new Promise((r) => setTimeout(r, 700));
-  return lastText;
 }
 
 function createGifEncoder() {
@@ -2073,9 +1530,6 @@ function startShutterProgress(durationMs) {
 async function finalizePreviewStart() {
   if (isPreviewing) return;
 
-  // After preview is running, request mic in background (won't block preview).
-  startMicRequestInBackground();
-
   try {
     await initJeelizFaceFilter();
   } catch (err) {
@@ -2085,27 +1539,6 @@ async function finalizePreviewStart() {
   }
 
   isPreviewing = true;
-  captionText = "";
-  captionSource = "none";
-
-  stopWebSpeech();
-  stopWhisperCaptions();
-
-  if (subtitleMode === "realtime") {
-    if (canUseWebSpeech()) {
-      startWebSpeech();
-    } else {
-      try {
-        await startWhisperRealtimeCaptions({ allowReload: false });
-      } catch (e) {
-        console.warn(e);
-        pendingWhisperRealtimeStart = true;
-        if (!pendingCoiReload) {
-          setStatus("实时字幕不可用：WebSpeech 不可用，whisper.wasm 启动失败（点按任意位置可再试）", "error");
-        }
-      }
-    }
-  }
 
   setStatus("预览中：点击快门录制 3 秒 GIF");
   drawFrame();
@@ -2139,7 +1572,7 @@ async function startPreview() {
   pendingPreviewStart = false;
   if (isPreviewing) stopPreview();
   setProgress("");
-  setStatus("初始化中：请求摄像头/麦克风权限…");
+  setStatus("初始化中：请求摄像头权限…");
 
   try {
     await preloadStickers();
@@ -2150,7 +1583,7 @@ async function startPreview() {
   let gotStream = false;
   const permHintTo = setTimeout(() => {
     if (gotStream) return;
-    setProgress("如果没有弹出授权弹窗：请检查 iPad/微信的摄像头与麦克风权限，然后点按页面任意位置再试");
+    setProgress("如果没有弹出授权弹窗：请检查 iPad/微信的摄像头权限，然后点按页面任意位置再试");
   }, 2500);
 
   try {
@@ -2183,6 +1616,7 @@ async function recordGif3s() {
     setStatus("预览未就绪：请等待摄像头画面出现后再录制", "error");
     return;
   }
+
   isRecording = true;
   els.btnShutter.classList.add("is-busy");
   setProgress("");
@@ -2195,162 +1629,91 @@ async function recordGif3s() {
   lastCapture = null;
   setOriginalGifBlob(null);
 
-  const stableMode = subtitleMode === "stable";
-  if (!stableMode) {
-    // Real-time mode: prefer WebSpeech; otherwise use whisper.wasm as fallback.
-    if (canUseWebSpeech()) {
-      if (!webSpeech) startWebSpeech();
-    } else {
-      try {
-        await startWhisperRealtimeCaptions({ allowReload: true });
-      } catch (e) {
-        console.warn(e);
-        pendingWhisperRealtimeStart = true;
-        if (!pendingCoiReload) {
-          setStatus("实时字幕不可用：WebSpeech 不可用，whisper.wasm 启动失败（点按任意位置可再试）", "error");
-        }
-      }
-    }
-  } else {
-    stopWebSpeech();
-    stopWhisperCaptions();
-    // Stable mode will degrade to empty captions if mic isn't available.
-  }
-
   const frames = [];
   const faces = [];
-  const start = performance.now();
+  const startedAt = performance.now();
 
-  let gif = null;
-  if (!stableMode) {
-    setStatus("录制中（3 秒）…");
-    gif = createGifEncoder();
-    gif.on("progress", (p) => {
-      const pct = Math.round((p || 0) * 100);
-      setProgress(`${pct}%`);
-    });
-    gif.on("finished", (blob) => {
-      setGifBlob(blob);
-      setOriginalGifBlob(blob);
-      lastCapture = {
-        frames,
-        faces,
-        delayMs: FRAME_DELAY_MS,
-        w: OUTPUT_SIZE,
-        h: OUTPUT_SIZE,
-        caption: captionText || "",
-      };
-      setStatus("拍摄完成");
-      setProgress("");
-      isRecording = false;
-      els.btnShutter.classList.remove("is-busy");
-      stopShutterProgress();
-      setShutterProgress(0);
-      showResult();
-    });
-  }
+  setStatus("录制中（3 秒）…");
 
-  // Stable subtitles: transcribe after/around recording using whisper.wasm.
-  let stableTranscribePromise = null;
-  if (stableMode) {
-    setStatus("准备中：初始化稳定字幕（whisper.wasm）…");
-    setProgress("初始化字幕引擎…");
-    try {
-      await ensureWhisperReady();
-      setStatus("录制中（3 秒）…请说话");
-      stableTranscribePromise = transcribeStableDuringRecording(DURATION_S * 1000).catch(() => "");
-    } catch (e) {
-      console.warn(e);
-      stableTranscribePromise = Promise.resolve("");
-    }
-    setProgress("");
-  }
+  const gif = createGifEncoder();
+  gif.on("progress", (p) => {
+    const pct = Math.round((p || 0) * 100);
+    setProgress(`${pct}%`);
+  });
 
-  let captured = 0;
-  let resolveCapture = null;
-  const captureDone = new Promise((r) => (resolveCapture = r));
-  const captureTick = () => {
-    if (captured >= FRAME_COUNT) return;
-    captured++;
-    try {
-      // Always sample frames for post-edit tools.
-      frames.push(ctx.getImageData(0, 0, OUTPUT_SIZE, OUTPUT_SIZE));
-      faces.push(getFaceRegion());
-      if (!stableMode) gif.addFrame(els.canvas, { copy: true, delay: FRAME_DELAY_MS });
-      setProgress(`采样帧：${captured}/${FRAME_COUNT}`);
-    } catch {
-      // ignore
-    }
-    if (captured >= FRAME_COUNT) resolveCapture();
-  };
+  const finishedBlob = await new Promise((resolve) => {
+    let done = false;
 
-  captureTick();
-  const captureTimer = setInterval(captureTick, FRAME_DELAY_MS);
-  await captureDone;
-  clearInterval(captureTimer);
+    const finish = (blob) => {
+      if (done) return;
+      done = true;
+      resolve(blob || null);
+    };
 
-  let stableCaption = "";
-  if (stableMode) {
-    setStatus("转写中（whisper.wasm）…");
-    stableCaption = (await stableTranscribePromise) || "";
+    gif.on("finished", (blob) => finish(blob));
 
-    captionText = stableCaption;
-    captionSource = stableCaption ? "whisper" : "none";
-
-    setStatus("编码 GIF 中…");
-    setProgress("0%");
-
-    gif = createGifEncoder();
-    gif.on("progress", (p) => {
-      const pct = Math.round((p || 0) * 100);
-      setProgress(`${pct}%`);
-    });
-    const finalFrames = [];
-
-    gif.on("finished", (blob) => {
-      setGifBlob(blob);
-      setOriginalGifBlob(blob);
-      lastCapture = {
-        frames: finalFrames.length ? finalFrames : frames,
-        faces,
-        delayMs: FRAME_DELAY_MS,
-        w: OUTPUT_SIZE,
-        h: OUTPUT_SIZE,
-        caption: captionText || "",
-      };
-      setStatus("拍摄完成");
-      setProgress("");
-      isRecording = false;
-      els.btnShutter.classList.remove("is-busy");
-      stopShutterProgress();
-      setShutterProgress(0);
-      showResult();
-    });
-
-    const encodeCanvas = document.createElement("canvas");
-    encodeCanvas.width = OUTPUT_SIZE;
-    encodeCanvas.height = OUTPUT_SIZE;
-    const encodeCtx = encodeCanvas.getContext("2d", { alpha: false });
-
-    for (const img of frames) {
-      encodeCtx.putImageData(img, 0, 0);
-      drawSubtitle(encodeCtx, captionText);
+    // Capture frames for exactly 3 seconds at 10fps.
+    let captured = 0;
+    const captureTick = () => {
+      if (captured >= FRAME_COUNT) return;
+      captured++;
       try {
-        finalFrames.push(encodeCtx.getImageData(0, 0, OUTPUT_SIZE, OUTPUT_SIZE));
+        // Sample final canvas only (no extra computation during recording).
+        frames.push(ctx.getImageData(0, 0, OUTPUT_SIZE, OUTPUT_SIZE));
+        faces.push(getFaceRegion());
+        gif.addFrame(els.canvas, { copy: true, delay: FRAME_DELAY_MS });
+        setProgress(`采样帧：${captured}/${FRAME_COUNT}`);
       } catch {
         // ignore
       }
-      gif.addFrame(encodeCanvas, { copy: true, delay: FRAME_DELAY_MS });
-    }
-    gif.render();
+
+      if (captured >= FRAME_COUNT) {
+        try {
+          clearInterval(timer);
+        } catch {
+          // ignore
+        }
+        setStatus("编码 GIF 中…");
+        setProgress("0%");
+        try {
+          gif.render();
+        } catch {
+          finish(null);
+        }
+      }
+    };
+
+    captureTick();
+    const timer = setInterval(captureTick, FRAME_DELAY_MS);
+
+    // Safety timeout: never hang the UI.
+    setTimeout(() => finish(null), 15000);
+  });
+
+  if (finishedBlob) {
+    setGifBlob(finishedBlob);
+    setOriginalGifBlob(finishedBlob);
+    lastCapture = {
+      frames,
+      faces,
+      delayMs: FRAME_DELAY_MS,
+      w: OUTPUT_SIZE,
+      h: OUTPUT_SIZE,
+    };
+    setStatus("拍摄完成");
+    showResult();
   } else {
-    setStatus("编码 GIF 中…");
-    setProgress("0%");
-    gif.render();
+    setStatus("拍摄失败，请重试", "error");
   }
 
-  const elapsed = Math.round(performance.now() - start);
-  console.debug(`record started, stableMode=${stableMode}, frames=${captured}, elapsedMs=${elapsed}`);
+  setProgress("");
+  isRecording = false;
+  els.btnShutter.classList.remove("is-busy");
+  stopShutterProgress();
+  setShutterProgress(0);
+
+  const elapsed = Math.round(performance.now() - startedAt);
+  console.debug(`record done, frames=${frames.length}, elapsedMs=${elapsed}`);
 }
 
 function downloadGif() {
@@ -2427,41 +1790,6 @@ async function saveToPhotos() {
   // Fallback: download to Files (user can then Save to Photos).
   downloadGif();
   setStatus("已下载到“文件”：打开后可保存到相册", "error");
-}
-
-function setSubtitleMode(nextMode) {
-  subtitleMode = nextMode;
-  els.btnSubRealtime.classList.toggle("is-active", subtitleMode === "realtime");
-  els.btnSubStable.classList.toggle("is-active", subtitleMode === "stable");
-
-  if (!isPreviewing) return;
-  captionText = "";
-  captionSource = "none";
-
-  if (subtitleMode === "stable") {
-    stopWebSpeech();
-    stopWhisperCaptions();
-    if (!crossOriginIsolated && !coiFailed()) {
-      ensureCoiForWhisper({ allowReload: true }).catch(() => {});
-    }
-    setStatus("稳定字幕优先：录制后转写并写入每帧");
-  } else {
-    stopWhisperCaptions();
-    if (canUseWebSpeech()) {
-      startWebSpeech();
-      setStatus("实时字幕优先：系统语音识别");
-    } else {
-      startWhisperRealtimeCaptions({ allowReload: true })
-        .then(() => setStatus("实时字幕优先：whisper.wasm"))
-        .catch((e) => {
-          console.warn(e);
-          pendingWhisperRealtimeStart = true;
-          if (!pendingCoiReload) {
-            setStatus("实时字幕不可用：WebSpeech 不可用，whisper.wasm 启动失败（点按任意位置可再试）", "error");
-          }
-        });
-    }
-  }
 }
 
 function bindTap(el, onTap, { moveThreshold = 10, maxPressMs = 700 } = {}) {
@@ -2957,24 +2285,10 @@ async function autoRequestPermissionsOnLoad() {
 function onAnyUserGesture() {
   // Help iOS Safari/WebViews start <video> playback and any audio processing.
   tryResumeVideoPlayback();
-  if (!hasMic) startMicRequestInBackground();
-
-  // If whisper engine needs a one-time COI reload, do it only after a user gesture (avoid "auto refresh").
-  if (pendingCoiReload && !crossOriginIsolated && !coiFailed()) {
-    pendingCoiReload = false;
-    ensureCoiForWhisper({ allowReload: true }).catch(() => {});
-  }
 
   // If preview couldn't start due to gesture restriction, retry now.
   if (pendingPreviewStart && !isPreviewing && streamIsLive(mediaStream)) {
     resumePendingPreviewStart().catch(() => {});
-  }
-
-  // If whisper realtime captions couldn't start due to gesture restriction, retry now.
-  if (pendingWhisperRealtimeStart && isPreviewing && subtitleMode === "realtime" && !isRecording) {
-    startWhisperRealtimeCaptions({ allowReload: true })
-      .then(() => setStatus("实时字幕：whisper.wasm 已启动"))
-      .catch(() => {});
   }
 }
 
@@ -3044,17 +2358,13 @@ els.emojiFile?.addEventListener("change", async () => {
   }
 });
 
-els.btnSubRealtime.addEventListener("click", () => setSubtitleMode("realtime"));
-els.btnSubStable.addEventListener("click", () => setSubtitleMode("stable"));
 
 // First paint
 ctx.fillStyle = "#000";
 ctx.fillRect(0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
-initCoiState();
 if (els.version) els.version.textContent = APP_VERSION;
 resetToDefaultView();
 renderEffects();
-setSubtitleMode("realtime");
 setSheetExpanded(false);
 setEffect(selectedEffectId);
 bindShutterHold();

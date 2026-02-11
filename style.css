@@ -295,24 +295,6 @@ button{font:inherit}
   font-weight:700;
   color:#111;
 }
-.wx-subtitleMode{
-  display:flex;
-  gap:8px;
-}
-.wx-subBtn{
-  border:1px solid #e6e7ea;
-  background:#fff;
-  border-radius:999px;
-  padding:8px 10px;
-  font-size:14px;
-  color:#4a4a4a;
-}
-.wx-subBtn.is-active{
-  border-color:rgba(7,193,96,.45);
-  background:rgba(7,193,96,.08);
-  color:#0b6d3a;
-}
-
 .wx-grid{
   display:grid;
   grid-template-columns:repeat(5,1fr);
