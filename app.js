@@ -70,6 +70,7 @@ let isPreviewing = false;
 let isRecording = false;
 let jeelizReady = false;
 let jeelizInitPromise = null;
+let previewFinalized = false;
 let lastGifBlob = null;
 let lastGifUrl = null;
 let lastOriginalGifBlob = null;
@@ -936,9 +937,10 @@ async function ensureVideoReady(videoEl, { timeoutMs = 12000 } = {}) {
       const timeNow = videoEl.currentTime || 0;
       const advanced = timeNow !== lastTime && timeNow > 0;
       lastTime = timeNow;
+      const seemsPlaying = videoEl.readyState >= 2 && !videoEl.paused;
 
       // Require both metadata and actual frame progress (fixes iPad Chrome black preview).
-      if (hasDims && (gotFrameCb || advanced)) return resolve();
+      if (hasDims && (gotFrameCb || advanced || seemsPlaying)) return resolve();
       if (performance.now() - start > timeoutMs) return reject(new Error("摄像头初始化超时"));
       tryRvfcb();
       tryPlay();
@@ -1566,6 +1568,7 @@ function spawnRandomMeme() {
 
 function stopPreview() {
   isPreviewing = false;
+  previewFinalized = false;
   if (rafId) cancelAnimationFrame(rafId);
   rafId = 0;
   destroyJeeliz();
@@ -1769,11 +1772,15 @@ function startShutterProgress(durationMs) {
 }
 
 async function finalizePreviewStart() {
-  if (isPreviewing) return;
-  isPreviewing = true;
+  if (previewFinalized) return;
+  previewFinalized = true;
+
+  if (!isPreviewing) {
+    isPreviewing = true;
+    drawFrame();
+  }
 
   setStatus("预览中：点击快门录制 3 秒 GIF");
-  drawFrame();
 
   // Initialize face tracking in background so preview never hangs/black-screens.
   startJeelizInBackground();
@@ -1805,6 +1812,7 @@ async function resumePendingPreviewStart({ timeoutMs = 9000 } = {}) {
 async function startPreview() {
   hideResult();
   pendingPreviewStart = false;
+  previewFinalized = false;
   if (isPreviewing) stopPreview();
   setProgress("");
   setStatus("初始化中：请求摄像头权限…");
@@ -1839,6 +1847,22 @@ async function startPreview() {
     // Common on iOS: permission granted but playback needs user gesture.
     pendingPreviewStart = true;
     setStatus("已获取权限但预览未启动：请点按任意按钮/页面一次以启动预览", "error");
+
+    // Keep the render loop alive so the underlying <video> can still show, and finalize automatically
+    // once frames start flowing (after a user gesture in some environments).
+    if (!isPreviewing) {
+      isPreviewing = true;
+      drawFrame();
+    }
+    const watchTo = setTimeout(() => {
+      if (!previewFinalized && isPreviewing) {
+        setStatus("仍未启动预览：请再次点按页面/快门按钮", "error");
+      }
+    }, 9000);
+    ensureVideoReady(els.video, { timeoutMs: 30000 })
+      .then(() => finalizePreviewStart())
+      .catch(() => {})
+      .finally(() => clearTimeout(watchTo));
     return;
   }
 
