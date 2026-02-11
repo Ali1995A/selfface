@@ -38,6 +38,8 @@ const els = {
   effectFromName: document.getElementById("effectFromName"),
   version: document.getElementById("appVersion"),
   toast: document.getElementById("toast"),
+  shareOverlay: document.getElementById("shareImageOverlay"),
+  shareImage: document.getElementById("shareImage"),
 
   sheet: document.getElementById("sheet"),
   sheetCollapsed: document.getElementById("sheetCollapsed"),
@@ -1996,6 +1998,35 @@ function isWeChatWebView() {
   return /MicroMessenger/i.test(ua);
 }
 
+function showShareOverlay(url) {
+  if (!els.shareOverlay || !els.shareImage) return;
+  els.shareImage.src = url || "";
+  els.shareOverlay.hidden = false;
+}
+
+function hideShareOverlay() {
+  if (!els.shareOverlay || !els.shareImage) return;
+  els.shareOverlay.hidden = true;
+  try {
+    els.shareImage.removeAttribute("src");
+  } catch {
+    // ignore
+  }
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    try {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 function copyToClipboardFallback(text) {
   try {
     const ta = document.createElement("textarea");
@@ -2048,6 +2079,18 @@ function waitWeixinBridgeReady(timeoutMs = 1500) {
       { once: true },
     );
   });
+}
+
+async function weChatOpenImagePreview(url) {
+  const bridge = await waitWeixinBridgeReady(1500);
+  if (!bridge || typeof bridge.invoke !== "function") return false;
+  try {
+    bridge.invoke("imagePreview", { current: url, urls: [url] }, () => {});
+    return true;
+  } catch (e) {
+    console.warn(e);
+    return false;
+  }
 }
 
 async function weChatShareLinkToFriend(url) {
@@ -2123,12 +2166,28 @@ async function shareGif() {
     return;
   }
 
-  // WeChat: don't try to share the GIF file (often no-op / broken). Share link + guide save-to-album workflow.
+  // WeChat: share the generated image (best-effort). Direct file-share to chats is unreliable;
+  // open image preview and let user long-press “发送给朋友/保存”. This matches WeChat's security model.
   if (isWeChatWebView()) {
-    const ok = await sharePageLink();
-    if (!ok) {
-      setStatus("微信内置浏览器不支持直接转发 GIF：请点“下载”保存到相册，再在微信发送", "error");
+    setStatus("正在打开图片预览…");
+    const url = lastGifUrl || (lastGifBlob ? URL.createObjectURL(lastGifBlob) : "");
+    if (url) showShareOverlay(url);
+
+    // Try WeChat native preview first (may expose “发送给朋友”). If it rejects blob:, try data URL.
+    let ok = url ? await weChatOpenImagePreview(url) : false;
+    if (!ok && lastGifBlob) {
+      try {
+        const dataUrl = await blobToDataUrl(lastGifBlob);
+        if (dataUrl) {
+          showShareOverlay(dataUrl);
+          ok = await weChatOpenImagePreview(dataUrl);
+        }
+      } catch (e) {
+        console.warn(e);
+      }
     }
+
+    if (!ok) setStatus("已打开图片：长按 → 发送给朋友 / 保存到相册", "error");
     return;
   }
 
@@ -2186,7 +2245,8 @@ async function saveToPhotos() {
 
   if (isWeChatWebView()) {
     // WeChat WebView is inconsistent with downloads; the most reliable path is long-press on preview.
-    setStatus("微信内：请长按 GIF 预览保存到相册（或用系统浏览器打开再下载）", "error");
+    setStatus("微信内：已打开图片，长按 → 保存到相册", "error");
+    if (lastGifUrl) showShareOverlay(lastGifUrl);
     try {
       // Still try a normal download as a secondary path.
       downloadGif();
@@ -2738,6 +2798,17 @@ window.addEventListener("touchend", onAnyUserGesture, { passive: true });
 window.addEventListener("pointerdown", onAnyUserGesture, { passive: true });
 window.addEventListener("touchstart", onAnyUserGesture, { passive: true });
 
+// Share overlay close
+if (els.shareOverlay) {
+  els.shareOverlay.addEventListener(
+    "click",
+    () => {
+      hideShareOverlay();
+    },
+    { passive: true },
+  );
+}
+
 els.btnSwitchCam.addEventListener("click", async () => {
   currentFacingMode = currentFacingMode === "user" ? "environment" : "user";
   await startPreview();
@@ -2908,6 +2979,17 @@ setEffect(selectedEffectId);
 bindShutterHold();
 bindMemeDrag();
 autoRequestPermissionsOnLoad();
+
+// WeChat: ensure option menu is visible (helps long-press/share flows in some builds).
+if (isWeChatWebView()) {
+  waitWeixinBridgeReady(2000).then((bridge) => {
+    try {
+      bridge?.call?.("showOptionMenu");
+    } catch {
+      // ignore
+    }
+  });
+}
 
 // iOS Safari may restore DOM state via BFCache; ensure we don't show mixed panels.
 window.addEventListener("pageshow", (e) => {
