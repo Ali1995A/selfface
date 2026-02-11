@@ -1238,6 +1238,18 @@ function canUseWebSpeech() {
   return "webkitSpeechRecognition" in window || "SpeechRecognition" in window;
 }
 
+function looksLikeSABOrCOIError(err) {
+  const msg = String(err?.message || err || "").toLowerCase();
+  return (
+    msg.includes("sharedarraybuffer") ||
+    msg.includes("crossoriginisolated") ||
+    msg.includes("cross-origin-isolated") ||
+    msg.includes("coep") ||
+    msg.includes("coop") ||
+    msg.includes("cross-origin")
+  );
+}
+
 function startWebSpeech() {
   try {
     const Ctor = window.webkitSpeechRecognition || window.SpeechRecognition;
@@ -1272,7 +1284,7 @@ function startWebSpeech() {
         try {
           if (!hasMic) await ensureMicOnlyStream();
           await startWhisperRealtimeCaptions({ allowReload: false });
-          setStatus("实时字幕：已切换到 whisper.wasm");
+          setStatus("系统语音识别不可用：已切换到 whisper.wasm");
           return;
         } catch (werr) {
           console.warn(werr);
@@ -1280,10 +1292,16 @@ function startWebSpeech() {
         }
       }
 
+      if (subtitleMode === "realtime") {
+        // Don't over-emphasize WebSpeech failure; in iOS/WeChat this is expected.
+        setStatus("系统语音识别不可用：将使用 whisper.wasm（点按任意位置可再试/启动）", "error");
+        return;
+      }
+
       if (err.includes("not-allowed") || err.includes("service-not-allowed")) {
-        setStatus("实时字幕不可用：系统语音识别不可用（已尝试 whisper.wasm，点按任意位置可再试）", "error");
+        setStatus("系统语音识别不可用：未获得麦克风权限或系统不支持语音识别", "error");
       } else {
-        setStatus("实时字幕不可用：系统语音识别出错（已尝试 whisper.wasm）", "error");
+        setStatus("系统语音识别出错：请切换到“稳定字幕优先”或使用 whisper.wasm", "error");
       }
     };
     rec.onend = () => {
@@ -1498,8 +1516,7 @@ async function startWhisperRealtimeCaptions({ allowReload = false } = {}) {
   if (!hasMic) await ensureMicOnlyStream();
   if (!crossOriginIsolated && !coiFailed()) {
     // May require a single reload to enable SharedArrayBuffer.
-    const ok = await ensureCoiForWhisper({ allowReload });
-    if (!ok) throw new Error("COI not ready");
+    await ensureCoiForWhisper({ allowReload });
   }
   await ensureWhisperReady();
   if (typeof whisperTranscriber?.startRecording !== "function") {
@@ -1521,6 +1538,14 @@ async function startWhisperRealtimeCaptions({ allowReload = false } = {}) {
     whisperNeedsUserGesture = false;
     pendingWhisperRealtimeStart = false;
   } catch (e) {
+    // If COI/SAB is the real blocker, prompt a one-time reload when possible.
+    if (!crossOriginIsolated && !coiFailed() && looksLikeSABOrCOIError(e)) {
+      try {
+        await ensureCoiForWhisper({ allowReload: false });
+      } catch {
+        // ignore
+      }
+    }
     // iOS/WebView often requires a user gesture to start audio capture/AudioContext.
     whisperNeedsUserGesture = true;
     pendingWhisperRealtimeStart = true;
@@ -1544,8 +1569,7 @@ async function transcribeStableDuringRecording(durationMs) {
   if (!hasMic) await ensureMicOnlyStream();
   if (!crossOriginIsolated && !coiFailed()) {
     // May require a single reload to enable SharedArrayBuffer.
-    const ok = await ensureCoiForWhisper({ allowReload: true });
-    if (!ok) throw new Error("COI not ready");
+    await ensureCoiForWhisper({ allowReload: true });
   }
   await ensureWhisperReady();
   if (typeof whisperTranscriber?.startRecording !== "function") {
