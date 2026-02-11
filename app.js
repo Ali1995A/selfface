@@ -160,6 +160,25 @@ const effects = [
     sticker: null,
     filter: "warmVignette",
   },
+  {
+    id: "heartBurst",
+    name: "爱心雨",
+    from: "selfface",
+    sticker: null,
+  },
+  {
+    id: "bubbles",
+    name: "泡泡",
+    from: "selfface",
+    sticker: null,
+  },
+  {
+    id: "rainbow",
+    name: "彩虹框",
+    from: "selfface",
+    sticker: null,
+    filter: "rainbowFrame",
+  },
   { id: "more", name: "更多特效", from: "", sticker: null, thumb: "more" },
 ];
 let selectedEffectId = "thanksBoss";
@@ -220,6 +239,58 @@ function drawWeChatText(context, text, { x, y, fontSize = 54, fill = "#ffffff", 
 function drawEffectOverlay(context, nowMs) {
   const t = (nowMs - effectState.startedAt) / 1000;
   const id = effectState.id;
+
+  if (id === "heartBurst") {
+    // Floating hearts mostly around edges / above head. Very low face occlusion.
+    context.save();
+    for (const h of effectState.particles) {
+      const yy = ((h.y - t * h.v) % (OUTPUT_SIZE + 140)) + OUTPUT_SIZE;
+      const x = h.x + Math.sin(t * 1.4 + h.p) * 10;
+      const y = yy - 60;
+      const a = particleAlphaOutsideFace(x, y, 0.55);
+      context.globalAlpha = a;
+      context.translate(x, y);
+      context.rotate(h.r + Math.sin(t + h.p) * 0.15);
+      const s = h.s * (0.9 + 0.1 * Math.sin(t * 2 + h.p));
+      context.scale(s, s);
+      // heart
+      context.fillStyle = h.c;
+      context.beginPath();
+      context.moveTo(0, 10);
+      context.bezierCurveTo(0, -6, -16, -8, -16, 4);
+      context.bezierCurveTo(-16, 16, 0, 22, 0, 30);
+      context.bezierCurveTo(0, 22, 16, 16, 16, 4);
+      context.bezierCurveTo(16, -8, 0, -6, 0, 10);
+      context.closePath();
+      context.fill();
+      context.setTransform(1, 0, 0, 1, 0, 0);
+    }
+    context.restore();
+    return;
+  }
+
+  if (id === "bubbles") {
+    // Soft colorful bubbles drifting; avoid face by fading.
+    context.save();
+    for (const b of effectState.particles) {
+      const x = b.x + Math.sin(t * b.w + b.p) * 14;
+      const y = ((b.y - t * b.v) % (OUTPUT_SIZE + 120)) + OUTPUT_SIZE - 60;
+      const a = particleAlphaOutsideFace(x, y, 0.22);
+      context.globalAlpha = a;
+      context.strokeStyle = b.c;
+      context.lineWidth = 2.2;
+      context.beginPath();
+      context.ellipse(x, y, b.r, b.r, 0, 0, Math.PI * 2);
+      context.stroke();
+      context.globalAlpha = a * 0.35;
+      context.fillStyle = b.c;
+      context.beginPath();
+      context.ellipse(x - b.r * 0.25, y - b.r * 0.25, b.r * 0.18, b.r * 0.18, 0, 0, Math.PI * 2);
+      context.fill();
+    }
+    context.restore();
+    return;
+  }
 
   if (id === "thanksBoss") {
     // Money background: subtle drifting banknotes behind.
@@ -678,6 +749,25 @@ function drawFrame() {
 
 function drawFrameOverlay(context) {
   // Color filters / vignette (minimal face occlusion)
+  if (currentEffect?.filter === "rainbowFrame") {
+    context.save();
+    // rainbow border
+    const w = 18;
+    const grad = context.createLinearGradient(0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
+    grad.addColorStop(0, "#ff5aa5");
+    grad.addColorStop(0.2, "#ffcc4a");
+    grad.addColorStop(0.4, "#6be8ff");
+    grad.addColorStop(0.6, "#7c5cff");
+    grad.addColorStop(0.8, "#4cffb7");
+    grad.addColorStop(1, "#ff5aa5");
+    context.lineWidth = w;
+    context.strokeStyle = grad;
+    context.globalAlpha = 0.95;
+    roundRectPath(context, w / 2 + 2, w / 2 + 2, OUTPUT_SIZE - w - 4, OUTPUT_SIZE - w - 4, 34);
+    context.stroke();
+    context.restore();
+  }
+
   if (currentEffect?.filter === "warmVignette") {
     context.save();
     context.globalAlpha = 0.14;
@@ -1370,6 +1460,44 @@ function setEffect(effectId) {
         y,
         v: 1.4 + rnd() * 2.3,
         p: rnd() * Math.PI * 2,
+      });
+    }
+  } else if (eff.id === "heartBurst") {
+    const palette = ["#ff5aa5", "#ff4d4d", "#ffcc4a", "#7c5cff", "#4cffb7"];
+    for (let i = 0; i < 16; i++) {
+      // bias to edges and upper area
+      const edge = Math.floor(rnd() * 4);
+      let x = rnd() * OUTPUT_SIZE;
+      if (edge === 0) x = 18 + rnd() * 36;
+      if (edge === 1) x = OUTPUT_SIZE - (18 + rnd() * 36);
+      if (edge === 2) x = rnd() * OUTPUT_SIZE;
+      if (edge === 3) x = rnd() * OUTPUT_SIZE;
+      effectState.particles.push({
+        x,
+        y: rnd() * (OUTPUT_SIZE + 140),
+        v: 55 + rnd() * 85,
+        r: (rnd() - 0.5) * 0.6,
+        s: 0.5 + rnd() * 0.55,
+        p: rnd() * Math.PI * 2,
+        c: palette[Math.floor(rnd() * palette.length)],
+      });
+    }
+  } else if (eff.id === "bubbles") {
+    const palette = [
+      "rgba(110,200,255,0.85)",
+      "rgba(255,170,210,0.85)",
+      "rgba(255,225,120,0.85)",
+      "rgba(140,255,210,0.85)",
+    ];
+    for (let i = 0; i < 12; i++) {
+      effectState.particles.push({
+        x: rnd() * OUTPUT_SIZE,
+        y: rnd() * (OUTPUT_SIZE + 120),
+        v: 38 + rnd() * 62,
+        r: 10 + rnd() * 18,
+        w: 0.6 + rnd() * 1.2,
+        p: rnd() * Math.PI * 2,
+        c: palette[Math.floor(rnd() * palette.length)],
       });
     }
   }
