@@ -2,6 +2,10 @@
 
 import JEELIZFACEFILTER from "./assets/jeeliz/jeelizFaceFilter.moduleES6.js";
 
+// Injected by Vite `define` (vite.config.js). Fallback is for dev/test.
+// eslint-disable-next-line no-undef
+const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "dev";
+
 const OUTPUT_SIZE = 360;
 const FPS = 10;
 const DURATION_S = 3;
@@ -36,6 +40,7 @@ const els = {
   jeelizCanvas: document.getElementById("jeelizCanvas"),
   gifPreview: document.getElementById("gifPreview"),
   effectFromName: document.getElementById("effectFromName"),
+  version: document.getElementById("appVersion"),
 
   sheet: document.getElementById("sheet"),
   sheetCollapsed: document.getElementById("sheetCollapsed"),
@@ -2742,6 +2747,7 @@ els.btnSubStable.addEventListener("click", () => setSubtitleMode("stable"));
 ctx.fillStyle = "#000";
 ctx.fillRect(0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
 initCoiState();
+if (els.version) els.version.textContent = APP_VERSION;
 resetToDefaultView();
 renderEffects();
 setSubtitleMode("realtime");

@@ -70,6 +70,14 @@ button{font:inherit}
 }
 .wx-source span{color:#5a6b7f}
 
+.wx-version{
+  text-align:center;
+  font-size:12px;
+  color:#b4b8bf;
+  letter-spacing:.2px;
+  padding-top:4px;
+}
+
 /* Stage */
 .wx-stage{
   display:flex;
@@ -539,6 +547,7 @@ button{font:inherit}
   .wx-top{ padding-bottom:6px; }
   .wx-notch{ transform: scale(.92); }
   .wx-source{ font-size:16px; }
+  .wx-version{ font-size:11px; }
   .wx-stage{ padding:12px 14px 6px; }
   .wx-card{ --card: min(92vw, 420px, 52svh); border-radius:24px; }
   .wx-sheetCollapsed{ padding:12px 12px 0; }
