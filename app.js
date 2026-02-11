@@ -47,6 +47,7 @@ let isRecording = false;
 let lastGifBlob = null;
 let lastGifUrl = null;
 let currentFacingMode = "user"; // "user" | "environment"
+let hasMic = false;
 
 let stickerImg = null;
 let stickerReady = false;
@@ -294,7 +295,25 @@ async function requestMedia(facingMode) {
     audio: true,
   };
 
-  return await navigator.mediaDevices.getUserMedia(constraints);
+  const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+  // iPad Safari / some WebViews may return a video-only stream even if audio:true.
+  // Try a second explicit audio-only request to force the mic permission prompt and obtain an audio track.
+  if (stream.getAudioTracks().length === 0) {
+    try {
+      const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      const [audioTrack] = audioStream.getAudioTracks();
+      if (audioTrack) stream.addTrack(audioTrack);
+      // Stop any extra tracks from the audio-only stream (we only keep the adopted audioTrack).
+      for (const t of audioStream.getTracks()) {
+        if (t !== audioTrack) t.stop();
+      }
+    } catch {
+      // ignore: we'll keep running with video-only
+    }
+  }
+
+  return stream;
 }
 
 function attachStreamToVideo(stream) {
@@ -495,6 +514,7 @@ function stopPreview() {
   stopTracks(micStream);
   mediaStream = null;
   micStream = null;
+  hasMic = false;
   faceState = null;
   stopWebSpeech();
 }
@@ -527,6 +547,7 @@ function startWebSpeech() {
     };
     rec.onerror = () => {
       // Some WebViews throw "not-allowed" / "service-not-allowed"
+      setStatus("实时字幕不可用：未获得麦克风权限或系统不支持语音识别", "error");
     };
     rec.onend = () => {
       // iOS/WebView often ends automatically; try restart while previewing and not recording stable mode.
@@ -648,7 +669,7 @@ async function recordAudioBlob(durationMs) {
 }
 
 function canRecordAudioBlob() {
-  return !!(micStream && micStream.getAudioTracks().length > 0 && "MediaRecorder" in window);
+  return !!(hasMic && micStream && micStream.getAudioTracks().length > 0 && "MediaRecorder" in window);
 }
 
 async function transcribeAudioBlobWithWhisper(blob) {
@@ -753,7 +774,14 @@ async function startPreview() {
   }
 
   // Split mic-only stream for record/transcribe.
-  micStream = new MediaStream(mediaStream.getAudioTracks());
+  {
+    const audioTracks = mediaStream.getAudioTracks();
+    hasMic = audioTracks.length > 0;
+    micStream = hasMic ? new MediaStream(audioTracks) : null;
+    if (!hasMic) {
+      setProgress("提示：未获得麦克风权限，字幕/转写可能不可用");
+    }
+  }
 
   try {
     await attachStreamToVideo(mediaStream);
@@ -803,6 +831,9 @@ async function recordGif3s() {
     }
   } else {
     stopWebSpeech();
+    if (!hasMic) {
+      setStatus("稳定字幕不可用：未获得麦克风权限（仍可生成无字幕 GIF）", "error");
+    }
   }
 
   const frames = stableMode ? [] : null;
