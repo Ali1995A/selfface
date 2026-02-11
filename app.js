@@ -8,6 +8,10 @@ const DURATION_S = 3;
 const FRAME_COUNT = FPS * DURATION_S;
 const FRAME_DELAY_MS = Math.round(1000 / FPS);
 
+const COI_SW_URL = "./coi-sw.js";
+const COI_RELOAD_KEY = "selfface_coi_reloaded_at";
+const COI_FAILED_KEY = "selfface_coi_failed";
+
 const els = {
   canvas: document.getElementById("outputCanvas"),
   status: document.getElementById("statusLine"),
@@ -63,6 +67,9 @@ let captionSource = "none"; // "webspeech" | "whisper" | "none"
 let webSpeech = null;
 let whisperTranscriber = null;
 let whisperReady = false;
+let whisperTextListener = null; // (text: string) => void
+let whisperIsRecording = false;
+let whisperNeedsUserGesture = false;
 let subtitleMode = "realtime"; // "realtime" | "stable"
 
 const effects = [
@@ -812,6 +819,7 @@ function stopPreview() {
   lastStreamFacingMode = null;
   faceState = null;
   stopWebSpeech();
+  stopWhisperCaptions();
 }
 
 function canUseWebSpeech() {
@@ -888,38 +896,114 @@ function loadScriptOnce(src) {
   });
 }
 
+function initCoiState() {
+  const attemptedAt = sessionStorage.getItem(COI_RELOAD_KEY);
+
+  if (crossOriginIsolated) {
+    localStorage.removeItem(COI_FAILED_KEY);
+    if (attemptedAt) sessionStorage.removeItem(COI_RELOAD_KEY);
+    return;
+  }
+
+  // If we already reloaded once for COI and still aren't isolated, don't try again.
+  if (attemptedAt) {
+    localStorage.setItem(COI_FAILED_KEY, "1");
+  }
+}
+
+function coiFailed() {
+  return localStorage.getItem(COI_FAILED_KEY) === "1";
+}
+
+async function ensureCoiForWhisper() {
+  if (crossOriginIsolated) return true;
+  if (coiFailed()) return false;
+  if (!("serviceWorker" in navigator)) return false;
+
+  try {
+    await navigator.serviceWorker.register(COI_SW_URL, { scope: "./" });
+    // Best-effort: give SW a moment to be ready.
+    try {
+      await navigator.serviceWorker.ready;
+    } catch {
+      // ignore
+    }
+  } catch (e) {
+    console.warn(e);
+    localStorage.setItem(COI_FAILED_KEY, "1");
+    return false;
+  }
+
+  // If this page isn't controlled yet, a single reload is needed for COI headers to apply.
+  if (!navigator.serviceWorker.controller) {
+    if (!sessionStorage.getItem(COI_RELOAD_KEY)) {
+      sessionStorage.setItem(COI_RELOAD_KEY, String(Date.now()));
+      setStatus("为启用稳定字幕（whisper.wasm），页面将自动刷新一次…");
+      location.reload();
+      return false;
+    }
+    // Reload already happened but still no controller -> avoid loops.
+    localStorage.setItem(COI_FAILED_KEY, "1");
+    return false;
+  }
+
+  // Controlled but still not isolated -> likely not supported in this environment.
+  if (!crossOriginIsolated) {
+    localStorage.setItem(COI_FAILED_KEY, "1");
+    return false;
+  }
+
+  return true;
+}
+
 async function ensureWhisperReady() {
   if (whisperReady) return;
 
   await loadScriptOnce("./assets/stt/whisper-web-transcriber.bundled.min.js");
 
   const lib = window.WhisperTranscriber;
-  const Ctor = lib?.WhisperTranscriber || lib?.default || lib;
-  if (!Ctor) {
+  const Ctor = lib?.WhisperTranscriber;
+  if (typeof Ctor !== "function") {
     throw new Error("whisper.wasm 相关脚本加载失败");
   }
 
   if (!crossOriginIsolated) {
-    // Not a hard error: some builds still work without SAB, but performance may be poor or fail.
-    console.warn("crossOriginIsolated=false; whisper.wasm 可能不可用或很慢（建议配置 COOP/COEP）。");
+    // Not always a hard error, but many WASM builds need SharedArrayBuffer.
+    console.warn("crossOriginIsolated=false; whisper.wasm 可能不可用或很慢（建议配置 COOP/COEP 或启用 COI SW）。");
   }
 
-  // Minimal config: use default model hosted by the library (may download on first run).
   whisperTranscriber = new Ctor({
-    language: "zh",
-    task: "transcribe",
-    // callbacks:
     onStatus: (s) => {
       if (typeof s === "string" && s) setProgress(s);
+    },
+    onProgress: (p) => {
+      if (typeof p === "number" && Number.isFinite(p)) setProgress(`${Math.round(p * 100)}%`);
     },
     onError: (err) => {
       console.error(err);
     },
+    onTranscription: (t) => {
+      const next = normalizeWhisperResult(t);
+      if (!next) return;
+      try {
+        whisperTextListener?.(next);
+      } catch {
+        // ignore
+      }
+    },
+    debug: false,
   });
 
-  if (typeof whisperTranscriber.init === "function") {
+  if (typeof whisperTranscriber.initialize === "function") {
+    await whisperTranscriber.initialize();
+  } else if (typeof whisperTranscriber.init === "function") {
     await whisperTranscriber.init();
   }
+
+  if (typeof whisperTranscriber.loadModel === "function") {
+    await whisperTranscriber.loadModel();
+  }
+
   whisperReady = true;
 }
 
@@ -928,85 +1012,89 @@ function normalizeWhisperResult(res) {
   if (typeof res === "string") return res.trim();
   if (typeof res.text === "string") return res.text.trim();
   if (typeof res.transcription === "string") return res.transcription.trim();
+  if (typeof res.transcribedText === "string") return res.transcribedText.trim();
   return "";
 }
 
-async function recordAudioBlob(durationMs) {
-  if (!micStream || micStream.getAudioTracks().length === 0) return null;
-  if (!("MediaRecorder" in window)) return null;
+function setWhisperTextListener(fn) {
+  whisperTextListener = typeof fn === "function" ? fn : null;
+}
 
-  const chunks = [];
-  let recorder = null;
-  try {
-    recorder = new MediaRecorder(micStream);
-  } catch {
-    return null;
+function whisperIsActuallyRecording() {
+  return !!(whisperIsRecording || whisperTranscriber?.isRecording);
+}
+
+async function startWhisperRealtimeCaptions() {
+  if (!crossOriginIsolated && !coiFailed()) {
+    // May trigger a single reload to enable SharedArrayBuffer.
+    await ensureCoiForWhisper();
   }
-
-  return await new Promise((resolve) => {
-    const finish = () => {
-      const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
-      resolve(blob.size ? blob : null);
-    };
-    recorder.ondataavailable = (e) => {
-      if (e.data && e.data.size) chunks.push(e.data);
-    };
-    recorder.onstop = finish;
-    recorder.start();
-    setTimeout(() => {
-      try {
-        recorder.stop();
-      } catch {
-        resolve(null);
-      }
-    }, durationMs);
-  });
-}
-
-function canRecordAudioBlob() {
-  return !!(hasMic && micStream && micStream.getAudioTracks().length > 0 && "MediaRecorder" in window);
-}
-
-async function transcribeAudioBlobWithWhisper(blob) {
   await ensureWhisperReady();
-  if (!blob) return "";
-
-  // Try common method names first (depends on library build).
-  const methodNames = ["transcribeBlob", "transcribeFile", "transcribe", "transcribeAudio"];
-  for (const name of methodNames) {
-    const fn = whisperTranscriber?.[name];
-    if (typeof fn === "function") {
-      const res = await fn.call(whisperTranscriber, blob);
-      return normalizeWhisperResult(res);
-    }
+  if (typeof whisperTranscriber?.startRecording !== "function") {
+    throw new Error("whisper.wasm 不支持 startRecording（脚本版本不匹配或未初始化）");
   }
 
-  throw new Error("whisper.wasm 不支持对录音文件转写（请升级脚本或改用录制时实时转写）");
+  setWhisperTextListener((text) => {
+    if (!isPreviewing) return;
+    if (subtitleMode !== "realtime") return;
+    captionText = text;
+    captionSource = "whisper";
+  });
+
+  if (whisperIsActuallyRecording()) return;
+
+  try {
+    await whisperTranscriber.startRecording();
+    whisperIsRecording = true;
+    whisperNeedsUserGesture = false;
+  } catch (e) {
+    // iOS/WebView often requires a user gesture to start audio capture/AudioContext.
+    whisperNeedsUserGesture = true;
+    throw e;
+  }
 }
 
-function whisperSupportsBlobTranscribe() {
-  const methodNames = ["transcribeBlob", "transcribeFile", "transcribe", "transcribeAudio"];
-  return methodNames.some((n) => typeof whisperTranscriber?.[n] === "function");
+async function stopWhisperCaptions() {
+  setWhisperTextListener(null);
+  if (!whisperTranscriber) return;
+  if (!whisperIsActuallyRecording()) return;
+  try {
+    await whisperTranscriber.stopRecording();
+  } catch {
+    // ignore
+  }
+  whisperIsRecording = false;
 }
 
 async function transcribeStableDuringRecording(durationMs) {
+  if (!crossOriginIsolated && !coiFailed()) {
+    // May trigger a single reload to enable SharedArrayBuffer.
+    await ensureCoiForWhisper();
+  }
   await ensureWhisperReady();
   if (typeof whisperTranscriber?.startRecording !== "function") {
-    throw new Error("whisperTranscriber.startRecording 不可用（脚本版本不匹配或未初始化）");
+    throw new Error("whisper.wasm 不支持 startRecording（脚本版本不匹配或未初始化）");
   }
 
   let lastText = "";
-  whisperTranscriber.onTranscription = (t) => {
-    const next = normalizeWhisperResult(t);
-    if (next) lastText = next;
-  };
+  const prevListener = whisperTextListener;
+  setWhisperTextListener((text) => {
+    if (text) lastText = text;
+  });
 
-  await whisperTranscriber.startRecording();
-  await new Promise((r) => setTimeout(r, durationMs));
-  await whisperTranscriber.stopRecording();
+  try {
+    await whisperTranscriber.startRecording();
+    whisperIsRecording = true;
+    whisperNeedsUserGesture = false;
+    await new Promise((r) => setTimeout(r, durationMs));
+    await whisperTranscriber.stopRecording();
+  } finally {
+    setWhisperTextListener(prevListener);
+    whisperIsRecording = false;
+  }
 
   // Give it a short time to flush.
-  await new Promise((r) => setTimeout(r, 600));
+  await new Promise((r) => setTimeout(r, 700));
   return lastText;
 }
 
@@ -1091,8 +1179,22 @@ async function startPreview() {
   captionText = "";
   captionSource = "none";
 
-  if (subtitleMode === "realtime" && canUseWebSpeech()) {
-    startWebSpeech();
+  stopWebSpeech();
+  stopWhisperCaptions();
+
+  if (subtitleMode === "realtime") {
+    if (canUseWebSpeech()) {
+      startWebSpeech();
+    } else if (hasMic) {
+      try {
+        await startWhisperRealtimeCaptions();
+      } catch (e) {
+        console.warn(e);
+        setStatus("实时字幕不可用：当前环境不支持 WebSpeech，且 whisper.wasm 启动失败（可尝试点按快门再试）", "error");
+      }
+    } else {
+      setStatus("实时字幕不可用：未获得麦克风权限", "error");
+    }
   }
 
   setStatus("预览中：点击快门录制 3 秒 GIF");
@@ -1111,13 +1213,22 @@ async function recordGif3s() {
 
   const stableMode = subtitleMode === "stable";
   if (!stableMode) {
-    // Real-time mode: ensure WebSpeech is running if possible.
-    if (!webSpeech && canUseWebSpeech()) startWebSpeech();
-    if (!canUseWebSpeech()) {
-      setStatus("当前环境不支持实时语音识别，可切到“稳定字幕优先”或无字幕。", "error");
+    // Real-time mode: prefer WebSpeech; otherwise use whisper.wasm as fallback.
+    if (canUseWebSpeech()) {
+      if (!webSpeech) startWebSpeech();
+    } else if (hasMic) {
+      try {
+        await startWhisperRealtimeCaptions();
+      } catch (e) {
+        console.warn(e);
+        setStatus("实时字幕不可用：WebSpeech 不支持，whisper.wasm 启动失败", "error");
+      }
+    } else {
+      setStatus("实时字幕不可用：未获得麦克风权限", "error");
     }
   } else {
     stopWebSpeech();
+    stopWhisperCaptions();
     if (!hasMic) {
       setStatus("稳定字幕不可用：未获得麦克风权限（仍可生成无字幕 GIF）", "error");
     }
@@ -1147,30 +1258,20 @@ async function recordGif3s() {
     });
   }
 
-  // Stable subtitles:
-  // - Prefer: record audio only during 3s, transcribe after (keeps recording phase light).
-  // - Fallback: if current whisper build can't transcribe a Blob, transcribe while recording.
+  // Stable subtitles: transcribe after/around recording using whisper.wasm.
   let stableTranscribePromise = null;
-  let audioBlobPromise = Promise.resolve(null);
   if (stableMode) {
     setStatus("准备中：初始化稳定字幕（whisper.wasm）…");
     setProgress("初始化字幕引擎…");
     try {
       await ensureWhisperReady();
-      if (whisperSupportsBlobTranscribe() && canRecordAudioBlob()) {
-        audioBlobPromise = recordAudioBlob(DURATION_S * 1000);
-      } else {
-        setStatus("录制中（3 秒）…（稳定字幕：录制时转写，可能更耗性能）");
-        stableTranscribePromise = transcribeStableDuringRecording(DURATION_S * 1000);
-      }
+      setStatus("录制中（3 秒）…请说话");
+      stableTranscribePromise = hasMic ? transcribeStableDuringRecording(DURATION_S * 1000) : Promise.resolve("");
     } catch (e) {
       console.warn(e);
       stableTranscribePromise = Promise.resolve("");
     }
-    if (!stableTranscribePromise) {
-      setStatus("录制中（3 秒）…请说话");
-      setProgress("");
-    }
+    setProgress("");
   }
 
   let captured = 0;
@@ -1201,17 +1302,7 @@ async function recordGif3s() {
   let stableCaption = "";
   if (stableMode) {
     setStatus("转写中（whisper.wasm）…");
-    if (stableTranscribePromise) {
-      stableCaption = (await stableTranscribePromise) || "";
-    } else {
-      const audioBlob = await audioBlobPromise;
-      try {
-        stableCaption = await transcribeAudioBlobWithWhisper(audioBlob);
-      } catch (e) {
-        console.warn(e);
-        stableCaption = "";
-      }
-    }
+    stableCaption = (await stableTranscribePromise) || "";
 
     captionText = stableCaption;
     captionSource = stableCaption ? "whisper" : "none";
@@ -1344,13 +1435,24 @@ function setSubtitleMode(nextMode) {
 
   if (subtitleMode === "stable") {
     stopWebSpeech();
+    stopWhisperCaptions();
     setStatus("稳定字幕优先：录制后转写并写入每帧");
   } else {
+    stopWhisperCaptions();
     if (canUseWebSpeech()) {
       startWebSpeech();
       setStatus("实时字幕优先：系统语音识别");
     } else {
-      setStatus("当前环境不支持实时语音识别，可切到稳定字幕优先", "error");
+      if (hasMic) {
+        startWhisperRealtimeCaptions()
+          .then(() => setStatus("实时字幕优先：whisper.wasm"))
+          .catch((e) => {
+            console.warn(e);
+            setStatus("实时字幕不可用：WebSpeech 不支持，whisper.wasm 启动失败", "error");
+          });
+      } else {
+        setStatus("实时字幕不可用：未获得麦克风权限", "error");
+      }
     }
   }
 }
@@ -1692,6 +1794,7 @@ els.btnSubStable.addEventListener("click", () => setSubtitleMode("stable"));
 // First paint
 ctx.fillStyle = "#000";
 ctx.fillRect(0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
+initCoiState();
 resetToDefaultView();
 renderEffects();
 setSubtitleMode("realtime");

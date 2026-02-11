@@ -7,10 +7,10 @@
 - 摄像头：`getUserMedia({ video: { facingMode: "user" }, audio: true })`
 - 渲染管线：`video -> canvas -> 叠加 PNG 贴纸 -> 叠加字幕 -> canvas`
 - GIF：默认 `360x360`，`10fps`，`3s`，共 `30` 帧；`gif.js` 使用 web worker
-- UI：3 个按钮（开始预览 / 录制 GIF / 下载 GIF）+ 1 个字幕策略开关；显示编码进度百分比
+- UI：WeChat 风格预览 + 特效面板 + 快门（长按/点按录制）+ 结果页下载/分享；显示生成进度
 - 字幕策略：
-  - **实时字幕优先**：优先 `webkitSpeechRecognition`（若环境不支持会提示）
-  - **稳定字幕优先**：录音后用 `whisper.wasm` 转写，再把字幕绘制进每一帧
+  - **实时字幕优先**：优先 `webkitSpeechRecognition`；不支持时自动用 `whisper.wasm` 兜底
+  - **稳定字幕优先**：使用 `whisper.wasm` 转写，并把字幕绘制进每一帧（确保进 GIF）
 
 ## 本地开发（HTTPS）
 
@@ -37,10 +37,12 @@
 `whisper.wasm`（浏览器端 Whisper）通常需要更强的设备，并可能依赖 `SharedArrayBuffer`（部分实现要求 **COOP/COEP** 头）。
 首次使用可能会下载较大的 wasm/模型文件，等待时间取决于网络与设备性能。
 
-- 如果你发现稳定字幕初始化失败或非常慢：页面会自动降级为“无字幕”或建议你改用“实时字幕优先”
+- 如果你发现初始化失败或非常慢：页面会提示降级或建议改用另一种字幕策略
 - 若你的托管支持设置响应头，建议开启：
   - `Cross-Origin-Opener-Policy: same-origin`
   - `Cross-Origin-Embedder-Policy: require-corp`
+
+本项目同时提供 `public/coi-sw.js`（COI Service Worker）尝试在不改服务器配置的情况下启用 COOP/COEP（可能需要自动刷新一次）。部分 WebView/隐私模式可能禁用 Service Worker，此时 whisper 可能不可用。
 
 ## 文件结构
 
