@@ -30,7 +30,8 @@ const els = {
 
   resultPanel: document.getElementById("resultPanel"),
   btnRetake: document.getElementById("btnRetake"),
-  btnAdd: document.getElementById("btnAdd"),
+  btnDownload: document.getElementById("btnDownload"),
+  btnShare: document.getElementById("btnShare"),
 
   btnSubRealtime: document.getElementById("btnSubRealtime"),
   btnSubStable: document.getElementById("btnSubStable"),
@@ -980,6 +981,72 @@ function downloadGif() {
   a.remove();
 }
 
+function gifFile() {
+  if (!lastGifBlob) return null;
+  const name = `selfface_${new Date().toISOString().replace(/[:.]/g, "-")}.gif`;
+  return new File([lastGifBlob], name, { type: "image/gif" });
+}
+
+async function shareGif() {
+  if (!lastGifBlob) {
+    setStatus("还没有可分享的 GIF，请先拍摄一次", "error");
+    return;
+  }
+  const file = gifFile();
+  if (!file) return;
+
+  try {
+    if (navigator.canShare && navigator.share && navigator.canShare({ files: [file] })) {
+      await navigator.share({
+        title: "selfface",
+        text: "selfface GIF",
+        files: [file],
+      });
+      setStatus("已打开系统分享面板");
+      return;
+    }
+  } catch (e) {
+    // AbortError: user cancelled
+    if (String(e?.name || "").toLowerCase().includes("abort")) return;
+    console.warn(e);
+  }
+
+  // Fallbacks:
+  // iOS without Web Share files: open in a new tab so user can long-press to save/share.
+  if (lastGifUrl) {
+    window.open(lastGifUrl, "_blank", "noopener,noreferrer");
+    setStatus("已打开 GIF：可长按保存/分享", "error");
+  } else {
+    downloadGif();
+    setStatus("已下载 GIF：可在“文件”中打开再分享/存相册", "error");
+  }
+}
+
+async function saveToPhotos() {
+  // Web can't directly write to iOS Photos. Best UX is Web Share -> “存储到相册 / 保存图片”.
+  if (!lastGifBlob) {
+    setStatus("还没有可下载的 GIF，请先拍摄一次", "error");
+    return;
+  }
+  const file = gifFile();
+  if (!file) return;
+
+  try {
+    if (navigator.canShare && navigator.share && navigator.canShare({ files: [file] })) {
+      setStatus("请在弹出的面板中选择“存储到相册 / 保存图片”");
+      await navigator.share({ files: [file], title: "selfface" });
+      return;
+    }
+  } catch (e) {
+    if (String(e?.name || "").toLowerCase().includes("abort")) return;
+    console.warn(e);
+  }
+
+  // Fallback: download to Files (user can then Save to Photos).
+  downloadGif();
+  setStatus("已下载到“文件”：打开后可保存到相册", "error");
+}
+
 function setSubtitleMode(nextMode) {
   subtitleMode = nextMode;
   els.btnSubRealtime.classList.toggle("is-active", subtitleMode === "realtime");
@@ -1248,8 +1315,12 @@ els.btnRetake.addEventListener("click", () => {
   setStatus("重拍：点击快门录制");
 });
 
-els.btnAdd.addEventListener("click", () => {
-  downloadGif();
+els.btnDownload.addEventListener("click", () => {
+  saveToPhotos();
+});
+
+els.btnShare.addEventListener("click", () => {
+  shareGif();
 });
 
 els.btnSubRealtime.addEventListener("click", () => setSubtitleMode("realtime"));
