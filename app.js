@@ -82,6 +82,8 @@ let resumePreviewPromise = null;
 let currentFacingMode = "user"; // "user" | "environment"
 let hasRequestedPermissions = false;
 let lastStreamFacingMode = null;
+let meme = { text: "", x: OUTPUT_SIZE / 2, y: 285, fontSize: 28, visible: false };
+let memeDrag = { active: false, dx: 0, dy: 0, pointerId: null };
 
 let stickerImg = null;
 let stickerReady = false;
@@ -1333,6 +1335,7 @@ function drawFrame() {
   drawSticker(ctx);
   drawEffectOverlay(ctx, now);
   drawFrameOverlay(ctx);
+  drawMemeText(ctx);
 
   ctx.restore();
 
@@ -1427,6 +1430,103 @@ function drawFrameOverlay(context) {
     }
     context.restore();
   }
+}
+
+const MEME_PHRASES = [
+  "太开心啦！",
+  "耶～",
+  "我超厉害",
+  "给你比心",
+  "冲鸭！",
+  "好耶！",
+  "今天真棒",
+  "笑一笑",
+  "爱你哟",
+  "可可爱爱",
+  "哇哦！",
+  "安排！",
+  "我来了",
+  "看我的",
+  "好运来",
+  "一起玩吧",
+  "你真好",
+  "别紧张",
+  "我不怕",
+  "开心到飞起",
+  "开拍啦",
+  "出发！",
+  "好喜欢",
+  "棒棒哒",
+];
+
+function pickRandom(arr) {
+  if (!arr || !arr.length) return "";
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function canvasPointFromClient(clientX, clientY) {
+  const rect = els.canvas.getBoundingClientRect();
+  const x = ((clientX - rect.left) / rect.width) * OUTPUT_SIZE;
+  const y = ((clientY - rect.top) / rect.height) * OUTPUT_SIZE;
+  return { x, y };
+}
+
+function pointInRect(px, py, r) {
+  return !!r && px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
+}
+
+function getMemeBounds(context) {
+  if (!meme.visible || !meme.text) return null;
+  const fs = meme.fontSize || 28;
+  context.save();
+  context.font = `900 ${fs}px -apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans SC",sans-serif`;
+  const w = context.measureText(meme.text).width;
+  context.restore();
+  const padX = 14;
+  const padY = 10;
+  const h = fs * 1.2;
+  return {
+    x: meme.x - w / 2 - padX,
+    y: meme.y - h / 2 - padY,
+    w: w + padX * 2,
+    h: h + padY * 2,
+  };
+}
+
+function drawMemeText(context) {
+  if (!meme.visible || !meme.text) return;
+
+  const fs = meme.fontSize || 28;
+  context.save();
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.font = `900 ${fs}px -apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans SC",sans-serif`;
+
+  context.lineJoin = "round";
+  context.lineCap = "round";
+  context.strokeStyle = "rgba(0,0,0,0.92)";
+  context.lineWidth = Math.max(6, Math.round(fs * 0.22));
+  context.strokeText(meme.text, meme.x, meme.y);
+
+  context.fillStyle = "rgba(255,255,255,0.98)";
+  context.fillText(meme.text, meme.x, meme.y);
+
+  context.restore();
+}
+
+function spawnRandomMeme() {
+  const text = pickRandom(MEME_PHRASES);
+  if (!text) return;
+
+  meme.text = text;
+  meme.visible = true;
+
+  const pad = 62;
+  meme.x = pad + Math.random() * (OUTPUT_SIZE - pad * 2);
+  meme.y = pad + Math.random() * (OUTPUT_SIZE - pad * 2);
+
+  setProgress("已添加文案：拖动可调整位置");
+  setTimeout(() => setProgress(""), 1200);
 }
 
 function stopPreview() {
@@ -2392,6 +2492,23 @@ function makeEffectThumb(effect) {
   item.appendChild(thumb);
   item.appendChild(label);
 
+  if (effect.id === "none") {
+    const memeBtn = document.createElement("button");
+    memeBtn.type = "button";
+    memeBtn.className = "wx-memeBtn";
+    memeBtn.textContent = "随机文案";
+    bindTap(memeBtn, (e) => {
+      try {
+        e?.preventDefault?.();
+        e?.stopPropagation?.();
+      } catch {
+        // ignore
+      }
+      spawnRandomMeme();
+    });
+    item.appendChild(memeBtn);
+  }
+
   bindTap(item, () => {
     try {
       if (effect.id === "more") {
@@ -2580,6 +2697,104 @@ bindTap(els.btnShare, () => {
   shareGif();
 });
 
+function bindMemeDrag() {
+  const el = els.canvas;
+  if (!el) return;
+
+  const onDown = (clientX, clientY, pointerId = null) => {
+    if (!meme.visible || !meme.text) return false;
+    const pt = canvasPointFromClient(clientX, clientY);
+    const bounds = getMemeBounds(ctx);
+    if (!pointInRect(pt.x, pt.y, bounds)) return false;
+
+    memeDrag.active = true;
+    memeDrag.pointerId = pointerId;
+    memeDrag.dx = pt.x - meme.x;
+    memeDrag.dy = pt.y - meme.y;
+    return true;
+  };
+
+  const onMove = (clientX, clientY) => {
+    if (!memeDrag.active) return;
+    const pt = canvasPointFromClient(clientX, clientY);
+    const pad = 18;
+    meme.x = clamp(pt.x - memeDrag.dx, pad, OUTPUT_SIZE - pad);
+    meme.y = clamp(pt.y - memeDrag.dy, pad, OUTPUT_SIZE - pad);
+  };
+
+  const onUp = () => {
+    memeDrag.active = false;
+    memeDrag.pointerId = null;
+  };
+
+  el.addEventListener(
+    "pointerdown",
+    (e) => {
+      const ok = onDown(e.clientX, e.clientY, e.pointerId);
+      if (ok) {
+        try {
+          el.setPointerCapture(e.pointerId);
+        } catch {
+          // ignore
+        }
+        e.preventDefault();
+      }
+    },
+    { passive: false },
+  );
+  el.addEventListener(
+    "pointermove",
+    (e) => {
+      if (!memeDrag.active) return;
+      if (memeDrag.pointerId != null && e.pointerId !== memeDrag.pointerId) return;
+      onMove(e.clientX, e.clientY);
+      e.preventDefault();
+    },
+    { passive: false },
+  );
+  el.addEventListener(
+    "pointerup",
+    (e) => {
+      if (memeDrag.pointerId != null && e.pointerId !== memeDrag.pointerId) return;
+      onUp();
+    },
+    { passive: true },
+  );
+  el.addEventListener(
+    "pointercancel",
+    (e) => {
+      if (memeDrag.pointerId != null && e.pointerId !== memeDrag.pointerId) return;
+      onUp();
+    },
+    { passive: true },
+  );
+
+  // iOS WeChat fallback:
+  el.addEventListener(
+    "touchstart",
+    (e) => {
+      const t = e.touches && e.touches[0];
+      if (!t) return;
+      const ok = onDown(t.clientX, t.clientY, null);
+      if (ok) e.preventDefault();
+    },
+    { passive: false },
+  );
+  el.addEventListener(
+    "touchmove",
+    (e) => {
+      if (!memeDrag.active) return;
+      const t = e.touches && e.touches[0];
+      if (!t) return;
+      onMove(t.clientX, t.clientY);
+      e.preventDefault();
+    },
+    { passive: false },
+  );
+  el.addEventListener("touchend", onUp, { passive: true });
+  el.addEventListener("touchcancel", onUp, { passive: true });
+}
+
 els.btnToolCutout?.addEventListener("click", async () => {
   if (!lastGifBlob) return;
   resultEdits.cutout = !resultEdits.cutout;
@@ -2632,6 +2847,7 @@ renderEffects();
 setSheetExpanded(false);
 setEffect(selectedEffectId);
 bindShutterHold();
+bindMemeDrag();
 autoRequestPermissionsOnLoad();
 
 // iOS Safari may restore DOM state via BFCache; ensure we don't show mixed panels.
