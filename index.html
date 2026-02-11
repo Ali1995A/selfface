@@ -88,10 +88,14 @@
 
       <div id="toast" class="wx-toast" role="status" aria-live="polite" hidden></div>
       <div id="shareImageOverlay" class="wx-shareOverlay" hidden aria-label="分享图片">
-        <div class="wx-shareWrap">
-          <img id="shareImage" class="wx-shareImg" alt="长按发送给朋友/保存到相册" />
-          <div class="wx-shareHint">长按图片 → 发送给朋友 / 保存到相册</div>
-          <div class="wx-shareHint2">点空白处关闭</div>
+        <div class="wx-shareWrap" role="dialog" aria-modal="true" aria-label="分享图片">
+          <button id="btnShareClose" class="wx-shareClose" type="button" aria-label="关闭"></button>
+          <img id="shareImage" class="wx-shareImg" alt="分享图片预览" />
+          <div class="wx-shareActions" role="group" aria-label="分享操作">
+            <button id="btnShareToFriend" class="wx-shareBtn wx-shareBtn--primary" type="button">发送给朋友</button>
+            <button id="btnSaveToAlbum" class="wx-shareBtn" type="button">保存到相册</button>
+          </div>
+          <div class="wx-shareNote">提示：微信网页无法直接“自动发送图片”，将打开图片预览供你确认发送/保存。</div>
         </div>
       </div>
     </main>

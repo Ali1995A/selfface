@@ -491,7 +491,8 @@ button{font:inherit}
 .wx-shareOverlay{
   position:fixed;
   inset:0;
-  background:rgba(0,0,0,.72);
+  background:rgba(255,255,255,.76);
+  backdrop-filter: blur(14px);
   display:flex;
   align-items:center;
   justify-content:center;
@@ -504,6 +505,7 @@ button{font:inherit}
   flex-direction:column;
   align-items:center;
   gap:12px;
+  position:relative;
 }
 .wx-shareImg{
   width:min(420px, 88vw);
@@ -516,16 +518,52 @@ button{font:inherit}
   -webkit-user-select: auto;
   user-select: auto;
 }
-.wx-shareHint{
-  color:rgba(255,255,255,.92);
-  font-size:14px;
-  text-align:center;
-  line-height:1.35;
+.wx-shareClose{
+  position:absolute;
+  top:-6px;
+  right:-6px;
+  width:44px;
+  height:44px;
+  border-radius:999px;
+  border:0;
+  background:rgba(0,0,0,.10);
+  display:grid;
+  place-items:center;
 }
-.wx-shareHint2{
-  color:rgba(255,255,255,.70);
+.wx-shareClose::before{
+  content:"";
+  width:18px;height:18px;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M6 6l12 12M18 6L6 18' fill='none' stroke='%23222222' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E")
+    center/contain no-repeat;
+  opacity:.9;
+}
+.wx-shareActions{
+  display:flex;
+  gap:12px;
+  width:min(420px, 88vw);
+}
+.wx-shareBtn{
+  flex:1;
+  height:44px;
+  border-radius:999px;
+  border:1px solid rgba(0,0,0,.10);
+  background:#fff;
+  font-size:15px;
+  color:#2a2a2a;
+  box-shadow:0 10px 24px rgba(0,0,0,.10);
+}
+.wx-shareBtn--primary{
+  border-color:rgba(7,193,96,.45);
+  background:rgba(7,193,96,.12);
+  color:#0b6d3a;
+}
+.wx-shareNote{
+  width:min(420px, 88vw);
+  color:rgba(0,0,0,.55);
   font-size:12px;
   text-align:center;
+  line-height:1.35;
 }
 
 /* Result panel overlay (tools + actions) */

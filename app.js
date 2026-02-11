@@ -40,6 +40,9 @@ const els = {
   toast: document.getElementById("toast"),
   shareOverlay: document.getElementById("shareImageOverlay"),
   shareImage: document.getElementById("shareImage"),
+  btnShareClose: document.getElementById("btnShareClose"),
+  btnShareToFriend: document.getElementById("btnShareToFriend"),
+  btnSaveToAlbum: document.getElementById("btnSaveToAlbum"),
 
   sheet: document.getElementById("sheet"),
   sheetCollapsed: document.getElementById("sheetCollapsed"),
@@ -2169,25 +2172,10 @@ async function shareGif() {
   // WeChat: share the generated image (best-effort). Direct file-share to chats is unreliable;
   // open image preview and let user long-press “发送给朋友/保存”. This matches WeChat's security model.
   if (isWeChatWebView()) {
-    setStatus("正在打开图片预览…");
-    const url = lastGifUrl || (lastGifBlob ? URL.createObjectURL(lastGifBlob) : "");
+    // Show preview instantly (no black step): reuse the already-on-screen preview URL.
+    const url = els.gifPreview?.src || lastGifUrl || (lastGifBlob ? URL.createObjectURL(lastGifBlob) : "");
     if (url) showShareOverlay(url);
-
-    // Try WeChat native preview first (may expose “发送给朋友”). If it rejects blob:, try data URL.
-    let ok = url ? await weChatOpenImagePreview(url) : false;
-    if (!ok && lastGifBlob) {
-      try {
-        const dataUrl = await blobToDataUrl(lastGifBlob);
-        if (dataUrl) {
-          showShareOverlay(dataUrl);
-          ok = await weChatOpenImagePreview(dataUrl);
-        }
-      } catch (e) {
-        console.warn(e);
-      }
-    }
-
-    if (!ok) setStatus("已打开图片：长按 → 发送给朋友 / 保存到相册", "error");
+    setStatus("请选择：发送给朋友 / 保存到相册");
     return;
   }
 
@@ -2800,10 +2788,11 @@ window.addEventListener("touchstart", onAnyUserGesture, { passive: true });
 
 // Share overlay close
 if (els.shareOverlay) {
+  // Close when tapping the dim area (but not when tapping inside the sheet).
   els.shareOverlay.addEventListener(
     "click",
-    () => {
-      hideShareOverlay();
+    (e) => {
+      if (e.target === els.shareOverlay) hideShareOverlay();
     },
     { passive: true },
   );
@@ -2826,6 +2815,55 @@ bindTap(els.btnDownload, () => {
 bindTap(els.btnShare, () => {
   shareGif();
 });
+
+if (els.btnShareClose) {
+  bindTap(els.btnShareClose, () => hideShareOverlay());
+}
+if (els.btnShareToFriend) {
+  bindTap(els.btnShareToFriend, async () => {
+    const url = els.shareImage?.src || els.gifPreview?.src || lastGifUrl || "";
+    if (!url) {
+      setStatus("没有可分享的图片，请先拍摄一次", "error");
+      return;
+    }
+    setStatus("正在打开微信图片预览…");
+    let ok = await weChatOpenImagePreview(url);
+    if (!ok && lastGifBlob) {
+      try {
+        const dataUrl = await blobToDataUrl(lastGifBlob);
+        if (dataUrl) ok = await weChatOpenImagePreview(dataUrl);
+      } catch {
+        // ignore
+      }
+    }
+    if (!ok) setStatus("打开预览失败：请长按图片选择“发送给朋友”", "error");
+  });
+}
+if (els.btnSaveToAlbum) {
+  bindTap(els.btnSaveToAlbum, async () => {
+    const url = els.shareImage?.src || els.gifPreview?.src || lastGifUrl || "";
+    if (!url) {
+      setStatus("没有可保存的图片，请先拍摄一次", "error");
+      return;
+    }
+    // Best-effort: trigger download; in WeChat this may fail, so open preview and instruct long-press save.
+    try {
+      downloadGif();
+    } catch {
+      // ignore
+    }
+    setStatus("已打开图片预览：长按 → 保存到相册", "error");
+    let ok = await weChatOpenImagePreview(url);
+    if (!ok && lastGifBlob) {
+      try {
+        const dataUrl = await blobToDataUrl(lastGifBlob);
+        if (dataUrl) ok = await weChatOpenImagePreview(dataUrl);
+      } catch {
+        // ignore
+      }
+    }
+  });
+}
 
 function bindMemeDrag() {
   const el = els.canvas;
